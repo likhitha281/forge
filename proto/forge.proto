@@ -1,0 +1,90 @@
+syntax = "proto3";
+package forge.v1;
+option go_package = "github.com/likhitha281/forge/gen/forge/v1;forgev1";
+
+service Forge {
+  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+  rpc GetJob(GetJobRequest) returns (Job);
+
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+
+  rpc LeaseJob(LeaseJobRequest) returns (LeaseJobResponse);
+  rpc CompleteJob(CompleteJobRequest) returns (CompleteJobResponse);
+  rpc RenewLease(RenewLeaseRequest) returns (RenewLeaseResponse);
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  QUEUED = 1;
+  RUNNING = 2;
+  COMPLETED = 3;
+  FAILED = 4;
+  CANCELLED = 5;
+}
+message Job {
+  string id = 1;
+  string payload = 2;
+  int32 priority = 3;
+  JobStatus status = 4;
+  int32 attempts = 5;
+  string error = 6;
+
+  string worker_id = 7;
+  int32 max_attempts = 8;
+  string created_at = 9;
+  string updated_at = 10;
+}
+message SubmitJobRequest { string payload=1; int32 priority=2; string idempotency_key=3; int32 max_attempts=4; }
+message SubmitJobResponse { string job_id=1; }
+message GetJobRequest { string job_id=1; }
+message RegisterWorkerRequest { string worker_id=1; int32 capacity=2; }
+message RegisterWorkerResponse { bool accepted=1; }
+message HeartbeatRequest { string worker_id=1; int32 running=2; }
+message HeartbeatResponse { bool ok=1; }
+message LeaseJobRequest { string worker_id=1; }
+message LeaseJobResponse { Job job=1; int32 lease_seconds=2; }
+message CompleteJobRequest { string worker_id=1; string job_id=2; bool success=3; string error=4; }
+message CompleteJobResponse { bool ok=1; }
+message ListJobsRequest {
+  int32 limit = 1;
+}
+
+message ListJobsResponse {
+  repeated Job jobs = 1;
+}
+
+message CancelJobRequest {
+  string job_id = 1;
+}
+
+message CancelJobResponse {
+  bool cancelled = 1;
+}
+
+message Worker {
+  string id = 1;
+  int32 capacity = 2;
+  int32 running = 3;
+  string last_heartbeat = 4;
+}
+
+message ListWorkersRequest {}
+
+message ListWorkersResponse {
+  repeated Worker workers = 1;
+}
+
+message RenewLeaseRequest {
+  string worker_id = 1;
+  string job_id = 2;
+}
+
+message RenewLeaseResponse {
+  bool renewed = 1;
+  int32 lease_seconds = 2;
+}
