@@ -2,12 +2,14 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 
 	forgev1 "github.com/likhitha281/forge/gen/forge/v1"
 	"github.com/likhitha281/forge/internal/metrics"
+	"github.com/likhitha281/forge/internal/resource"
 	"github.com/likhitha281/forge/internal/storage"
 
 	"google.golang.org/grpc/codes"
@@ -40,6 +42,35 @@ func statusPB(value string) forgev1.JobStatus {
 	}
 }
 
+// resourcePB converts Forge's internal resource representation into the
+// protobuf representation exposed through the gRPC API.
+func resourcePB(v resource.Vector) *forgev1.ResourceVector {
+	return &forgev1.ResourceVector{
+		CpuCores: v.CPUCores,
+		MemoryMb: v.MemoryMB,
+		Gpus:     v.GPUs,
+	}
+}
+
+// resourceFromPB converts the protobuf resource representation into the
+// internal scheduler representation.
+//
+// A nil ResourceVector represents a zero-resource request. This preserves
+// backwards compatibility with clients that do not yet specify resources.
+func resourceFromPB(v *forgev1.ResourceVector) resource.Vector {
+	if v == nil {
+		return resource.Vector{}
+	}
+
+	return resource.Vector{
+		CPUCores: v.CpuCores,
+		MemoryMB: v.MemoryMb,
+		GPUs:     v.Gpus,
+	}
+}
+
+// pb converts the persistent storage representation of a job into the
+// protobuf representation returned to clients and workers.
 func pb(job storage.Job) *forgev1.Job {
 	result := &forgev1.Job{
 		Id:          job.ID,
@@ -50,6 +81,7 @@ func pb(job storage.Job) *forgev1.Job {
 		Error:       job.Error,
 		WorkerId:    job.WorkerID,
 		MaxAttempts: int32(job.MaxAttempts),
+		Resources:   resourcePB(job.Resources),
 	}
 
 	if !job.CreatedAt.IsZero() {
@@ -68,7 +100,20 @@ func (s *Server) SubmitJob(
 	request *forgev1.SubmitJobRequest,
 ) (*forgev1.SubmitJobResponse, error) {
 	if request.Payload == "" {
-		return nil, status.Error(codes.InvalidArgument, "payload required")
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"payload required",
+		)
+	}
+
+	resources := resourceFromPB(request.Resources)
+
+	if err := resources.Validate(); err != nil {
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			"invalid resources: %v",
+			err,
+		)
 	}
 
 	id := uuid.NewString()
@@ -80,6 +125,7 @@ func (s *Server) SubmitJob(
 		request.IdempotencyKey,
 		int(request.Priority),
 		int(request.MaxAttempts),
+		resources,
 	)
 	if err != nil {
 		return nil, err
@@ -108,7 +154,10 @@ func (s *Server) ListJobs(
 	ctx context.Context,
 	request *forgev1.ListJobsRequest,
 ) (*forgev1.ListJobsResponse, error) {
-	jobs, err := s.Store.ListJobs(ctx, int(request.Limit))
+	jobs, err := s.Store.ListJobs(
+		ctx,
+		int(request.Limit),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +165,10 @@ func (s *Server) ListJobs(
 	response := &forgev1.ListJobsResponse{}
 
 	for _, job := range jobs {
-		response.Jobs = append(response.Jobs, pb(job))
+		response.Jobs = append(
+			response.Jobs,
+			pb(job),
+		)
 	}
 
 	return response, nil
@@ -133,7 +185,10 @@ func (s *Server) CancelJob(
 		)
 	}
 
-	cancelled, err := s.Store.CancelJob(ctx, request.JobId)
+	cancelled, err := s.Store.CancelJob(
+		ctx,
+		request.JobId,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -154,10 +209,35 @@ func (s *Server) RegisterWorker(
 	ctx context.Context,
 	request *forgev1.RegisterWorkerRequest,
 ) (*forgev1.RegisterWorkerResponse, error) {
+	if request.WorkerId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker_id required",
+		)
+	}
+
+	if request.Capacity <= 0 {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker capacity must be greater than zero",
+		)
+	}
+
+	resources := resourceFromPB(request.Resources)
+
+	if err := resources.Validate(); err != nil {
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			"invalid worker resources: %v",
+			err,
+		)
+	}
+
 	if err := s.Store.Register(
 		ctx,
 		request.WorkerId,
 		int(request.Capacity),
+		resources,
 	); err != nil {
 		return nil, err
 	}
@@ -171,6 +251,13 @@ func (s *Server) Heartbeat(
 	ctx context.Context,
 	request *forgev1.HeartbeatRequest,
 ) (*forgev1.HeartbeatResponse, error) {
+	if request.WorkerId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker_id required",
+		)
+	}
+
 	if err := s.Store.Heartbeat(
 		ctx,
 		request.WorkerId,
@@ -203,6 +290,7 @@ func (s *Server) ListWorkers(
 				Capacity:      int32(worker.Capacity),
 				Running:       int32(worker.Running),
 				LastHeartbeat: worker.LastHeartbeat.Format(time.RFC3339),
+				Resources:     resourcePB(worker.Resources),
 			},
 		)
 	}
@@ -214,20 +302,39 @@ func (s *Server) LeaseJob(
 	ctx context.Context,
 	request *forgev1.LeaseJobRequest,
 ) (*forgev1.LeaseJobResponse, error) {
+	if request.WorkerId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker_id required",
+		)
+	}
+
+	const leaseDuration = 30 * time.Second
+
 	job, err := s.Store.Lease(
 		ctx,
 		request.WorkerId,
-		30*time.Second,
+		leaseDuration,
 	)
 	if err != nil {
-		return nil, status.Error(codes.NotFound, "no queued job")
+		if errors.Is(err, storage.ErrNoLeasableJob) {
+			return nil, status.Error(
+				codes.NotFound,
+				"no queued job fits worker resources",
+			)
+		}
+
+		return nil, status.Error(
+			codes.Internal,
+			"failed to lease job",
+		)
 	}
 
 	metrics.QueueLeases.Inc()
 
 	return &forgev1.LeaseJobResponse{
 		Job:          pb(job),
-		LeaseSeconds: 30,
+		LeaseSeconds: int32(leaseDuration.Seconds()),
 	}, nil
 }
 
@@ -235,6 +342,13 @@ func (s *Server) CompleteJob(
 	ctx context.Context,
 	request *forgev1.CompleteJobRequest,
 ) (*forgev1.CompleteJobResponse, error) {
+	if request.JobId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"job_id required",
+		)
+	}
+
 	if err := s.Store.Complete(
 		ctx,
 		request.JobId,
@@ -245,11 +359,14 @@ func (s *Server) CompleteJob(
 	}
 
 	result := "success"
+
 	if !request.Success {
 		result = "failure"
 	}
 
-	metrics.JobsCompleted.WithLabelValues(result).Inc()
+	metrics.JobsCompleted.
+		WithLabelValues(result).
+		Inc()
 
 	return &forgev1.CompleteJobResponse{
 		Ok: true,

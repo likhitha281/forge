@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: forge
       POSTGRES_DB: forge
     volumes:
-      - ./migrations/001_initial.sql:/docker-entrypoint-initdb.d/001.sql:ro
+      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U forge"]
       interval: 3s
@@ -36,6 +36,9 @@ services:
     environment:
       FORGE_ADDR: "coordinator:50051"
       WORKER_CAPACITY: "4"
+      WORKER_CPU_CORES: "8"
+      WORKER_MEMORY_MB: "16384"
+      WORKER_GPUS: "0"
     depends_on:
       - coordinator
 

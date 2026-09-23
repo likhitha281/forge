@@ -38,10 +38,39 @@ func main() {
 		log.Fatalf("invalid WORKER_CAPACITY: %v", err)
 	}
 
+	cpuCores, err := strconv.ParseFloat(
+		env("WORKER_CPU_CORES", "0"),
+		64,
+	)
+	if err != nil {
+		log.Fatalf("invalid WORKER_CPU_CORES: %v", err)
+	}
+
+	memoryMB, err := strconv.ParseInt(
+		env("WORKER_MEMORY_MB", "0"),
+		10,
+		64,
+	)
+	if err != nil {
+		log.Fatalf("invalid WORKER_MEMORY_MB: %v", err)
+	}
+
+	gpus, err := strconv.ParseInt(
+		env("WORKER_GPUS", "0"),
+		10,
+		32,
+	)
+	if err != nil {
+		log.Fatalf("invalid WORKER_GPUS: %v", err)
+	}
+
 	log.Printf(
-		"starting Forge worker id=%s capacity=%d coordinator=%s",
+		"starting Forge worker id=%s capacity=%d cpu=%.2f memory=%dMB gpus=%d coordinator=%s",
 		id,
 		capN,
+		cpuCores,
+		memoryMB,
+		gpus,
 		addr,
 	)
 
@@ -63,6 +92,12 @@ func main() {
 		&forgev1.RegisterWorkerRequest{
 			WorkerId: id,
 			Capacity: int32(capN),
+
+			Resources: &forgev1.ResourceVector{
+				CpuCores: cpuCores,
+				MemoryMb: memoryMB,
+				Gpus:     int32(gpus),
+			},
 		},
 	); err != nil {
 		log.Fatal(err)

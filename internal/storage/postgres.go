@@ -5,8 +5,13 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/likhitha281/forge/internal/resource"
 )
+
+var ErrNoLeasableJob = errors.New("no leasable job")
 
 type Job struct {
 	ID          string
@@ -19,6 +24,8 @@ type Job struct {
 	MaxAttempts int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+
+	Resources resource.Vector
 }
 
 type Worker struct {
@@ -26,6 +33,8 @@ type Worker struct {
 	Capacity      int
 	Running       int
 	LastHeartbeat time.Time
+
+	Resources resource.Vector
 }
 
 type Store struct {
@@ -48,7 +57,12 @@ func (s *Store) Submit(
 	key string,
 	priority int,
 	maxAttempts int,
+	resources resource.Vector,
 ) (string, error) {
+	if err := resources.Validate(); err != nil {
+		return "", err
+	}
+
 	if maxAttempts <= 0 {
 		maxAttempts = 3
 	}
@@ -63,9 +77,12 @@ func (s *Store) Submit(
 			payload,
 			priority,
 			idempotency_key,
-			max_attempts
+			max_attempts,
+			cpu_cores,
+			memory_mb,
+			gpu_count
 		)
-		VALUES($1, $2, $3, NULLIF($4, ''), $5)
+		VALUES($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
 		ON CONFLICT(idempotency_key)
 		DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
 		RETURNING id::text
@@ -75,6 +92,9 @@ func (s *Store) Submit(
 		priority,
 		key,
 		maxAttempts,
+		resources.CPUCores,
+		resources.MemoryMB,
+		resources.GPUs,
 	).Scan(&jobID)
 
 	return jobID, err
@@ -96,7 +116,10 @@ func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 			COALESCE(error, ''),
 			COALESCE(worker_id, ''),
 			created_at,
-			updated_at
+			updated_at,
+			cpu_cores,
+			memory_mb,
+			gpu_count
 		FROM jobs
 		WHERE id = $1
 		`,
@@ -112,6 +135,9 @@ func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 		&job.WorkerID,
 		&job.CreatedAt,
 		&job.UpdatedAt,
+		&job.Resources.CPUCores,
+		&job.Resources.MemoryMB,
+		&job.Resources.GPUs,
 	)
 
 	return job, err
@@ -139,7 +165,10 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 			COALESCE(error, ''),
 			COALESCE(worker_id, ''),
 			created_at,
-			updated_at
+			updated_at,
+			cpu_cores,
+			memory_mb,
+			gpu_count
 		FROM jobs
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -167,6 +196,9 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 			&job.WorkerID,
 			&job.CreatedAt,
 			&job.UpdatedAt,
+			&job.Resources.CPUCores,
+			&job.Resources.MemoryMB,
+			&job.Resources.GPUs,
 		); err != nil {
 			return nil, err
 		}
@@ -203,19 +235,40 @@ func (s *Store) CancelJob(ctx context.Context, id string) (bool, error) {
 	return result.RowsAffected() == 1, nil
 }
 
-func (s *Store) Register(ctx context.Context, id string, capacity int) error {
+func (s *Store) Register(
+	ctx context.Context,
+	id string,
+	capacity int,
+	resources resource.Vector,
+) error {
+	if err := resources.Validate(); err != nil {
+		return err
+	}
+
 	_, err := s.DB.Exec(
 		ctx,
 		`
-		INSERT INTO workers(id, capacity)
-		VALUES($1, $2)
+		INSERT INTO workers(
+			id,
+			capacity,
+			cpu_capacity,
+			memory_capacity_mb,
+			gpu_capacity
+		)
+		VALUES($1, $2, $3, $4, $5)
 		ON CONFLICT(id)
 		DO UPDATE SET
-			capacity = $2,
+			capacity = EXCLUDED.capacity,
+			cpu_capacity = EXCLUDED.cpu_capacity,
+			memory_capacity_mb = EXCLUDED.memory_capacity_mb,
+			gpu_capacity = EXCLUDED.gpu_capacity,
 			last_heartbeat = now()
 		`,
 		id,
 		capacity,
+		resources.CPUCores,
+		resources.MemoryMB,
+		resources.GPUs,
 	)
 
 	return err
@@ -254,7 +307,10 @@ func (s *Store) ListWorkers(ctx context.Context) ([]Worker, error) {
 			id,
 			capacity,
 			running,
-			last_heartbeat
+			last_heartbeat,
+			cpu_capacity,
+			memory_capacity_mb,
+			gpu_capacity
 		FROM workers
 		ORDER BY id
 		`,
@@ -274,6 +330,9 @@ func (s *Store) ListWorkers(ctx context.Context) ([]Worker, error) {
 			&worker.Capacity,
 			&worker.Running,
 			&worker.LastHeartbeat,
+			&worker.Resources.CPUCores,
+			&worker.Resources.MemoryMB,
+			&worker.Resources.GPUs,
 		); err != nil {
 			return nil, err
 		}
@@ -299,8 +358,88 @@ func (s *Store) Lease(
 	}
 	defer tx.Rollback(ctx)
 
+	// Lock the worker row for the entire scheduling decision.
+	//
+	// This serializes concurrent Lease calls for the same worker. Without
+	// this lock, multiple goroutines could observe the same available
+	// resources and collectively oversubscribe the worker.
+	var capacity resource.Vector
+	var maxConcurrent int
+
+	err = tx.QueryRow(
+		ctx,
+		`
+		SELECT
+			capacity,
+			cpu_capacity,
+			memory_capacity_mb,
+			gpu_capacity
+		FROM workers
+		WHERE id = $1
+		FOR UPDATE
+		`,
+		worker,
+	).Scan(
+		&maxConcurrent,
+		&capacity.CPUCores,
+		&capacity.MemoryMB,
+		&capacity.GPUs,
+	)
+	if err != nil {
+		return Job{}, err
+	}
+
+	// Derive current resource allocation from RUNNING jobs.
+	//
+	// RUNNING jobs are the authoritative source of allocation state. This
+	// avoids maintaining a separate mutable allocation counter that could
+	// drift out of sync after failures or coordinator restarts.
+	var allocated resource.Vector
+	var runningJobs int
+
+	err = tx.QueryRow(
+		ctx,
+		`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(cpu_cores), 0),
+			COALESCE(SUM(memory_mb), 0),
+			COALESCE(SUM(gpu_count), 0)
+		FROM jobs
+		WHERE status = 'RUNNING'
+		  AND worker_id = $1
+		`,
+		worker,
+	).Scan(
+		&runningJobs,
+		&allocated.CPUCores,
+		&allocated.MemoryMB,
+		&allocated.GPUs,
+	)
+	if err != nil {
+		return Job{}, err
+	}
+
+	// Preserve the existing worker concurrency-slot limit in addition to
+	// resource-based scheduling.
+	if runningJobs >= maxConcurrent {
+		return Job{}, ErrNoLeasableJob
+	}
+
+	available, err := capacity.Subtract(allocated)
+	if err != nil {
+		return Job{}, errors.New(
+			"worker resource invariant violated: allocated resources exceed capacity",
+		)
+	}
+
 	var job Job
 
+	// Select the highest-priority queued job that fits the worker's
+	// currently available resources.
+	//
+	// SKIP LOCKED allows different workers to lease different jobs
+	// concurrently while avoiding duplicate ownership.
 	err = tx.QueryRow(
 		ctx,
 		`
@@ -311,13 +450,22 @@ func (s *Store) Lease(
 			status,
 			attempts,
 			max_attempts,
-			COALESCE(error, '')
+			COALESCE(error, ''),
+			cpu_cores,
+			memory_mb,
+			gpu_count
 		FROM jobs
 		WHERE status = 'QUEUED'
+		  AND cpu_cores <= $1
+		  AND memory_mb <= $2
+		  AND gpu_count <= $3
 		ORDER BY priority ASC, created_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
 		`,
+		available.CPUCores,
+		available.MemoryMB,
+		available.GPUs,
 	).Scan(
 		&job.ID,
 		&job.Payload,
@@ -326,7 +474,15 @@ func (s *Store) Lease(
 		&job.Attempts,
 		&job.MaxAttempts,
 		&job.Error,
+		&job.Resources.CPUCores,
+		&job.Resources.MemoryMB,
+		&job.Resources.GPUs,
 	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Job{}, ErrNoLeasableJob
+	}
+
 	if err != nil {
 		return Job{}, err
 	}

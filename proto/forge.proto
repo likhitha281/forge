@@ -1,5 +1,7 @@
 syntax = "proto3";
+
 package forge.v1;
+
 option go_package = "github.com/likhitha281/forge/gen/forge/v1;forgev1";
 
 service Forge {
@@ -26,6 +28,19 @@ enum JobStatus {
   FAILED = 4;
   CANCELLED = 5;
 }
+
+// ResourceVector describes either a workload's resource request
+// or a worker's total resource capacity.
+//
+// CPU cores may be fractional.
+// Memory is represented in MiB.
+// GPUs is initially a count; device type/topology comes later.
+message ResourceVector {
+  double cpu_cores = 1;
+  int64 memory_mb = 2;
+  int32 gpus = 3;
+}
+
 message Job {
   string id = 1;
   string payload = 2;
@@ -38,18 +53,70 @@ message Job {
   int32 max_attempts = 8;
   string created_at = 9;
   string updated_at = 10;
+
+  ResourceVector resources = 11;
 }
-message SubmitJobRequest { string payload=1; int32 priority=2; string idempotency_key=3; int32 max_attempts=4; }
-message SubmitJobResponse { string job_id=1; }
-message GetJobRequest { string job_id=1; }
-message RegisterWorkerRequest { string worker_id=1; int32 capacity=2; }
-message RegisterWorkerResponse { bool accepted=1; }
-message HeartbeatRequest { string worker_id=1; int32 running=2; }
-message HeartbeatResponse { bool ok=1; }
-message LeaseJobRequest { string worker_id=1; }
-message LeaseJobResponse { Job job=1; int32 lease_seconds=2; }
-message CompleteJobRequest { string worker_id=1; string job_id=2; bool success=3; string error=4; }
-message CompleteJobResponse { bool ok=1; }
+
+message SubmitJobRequest {
+  string payload = 1;
+  int32 priority = 2;
+  string idempotency_key = 3;
+  int32 max_attempts = 4;
+
+  ResourceVector resources = 5;
+}
+
+message SubmitJobResponse {
+  string job_id = 1;
+}
+
+message GetJobRequest {
+  string job_id = 1;
+}
+
+message RegisterWorkerRequest {
+  string worker_id = 1;
+
+  // Existing concurrency-slot limit.
+  int32 capacity = 2;
+
+  // Physical/logical compute capacity.
+  ResourceVector resources = 3;
+}
+
+message RegisterWorkerResponse {
+  bool accepted = 1;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  int32 running = 2;
+}
+
+message HeartbeatResponse {
+  bool ok = 1;
+}
+
+message LeaseJobRequest {
+  string worker_id = 1;
+}
+
+message LeaseJobResponse {
+  Job job = 1;
+  int32 lease_seconds = 2;
+}
+
+message CompleteJobRequest {
+  string worker_id = 1;
+  string job_id = 2;
+  bool success = 3;
+  string error = 4;
+}
+
+message CompleteJobResponse {
+  bool ok = 1;
+}
+
 message ListJobsRequest {
   int32 limit = 1;
 }
@@ -68,9 +135,14 @@ message CancelJobResponse {
 
 message Worker {
   string id = 1;
+
+  // Maximum concurrent jobs.
   int32 capacity = 2;
+
   int32 running = 3;
   string last_heartbeat = 4;
+
+  ResourceVector resources = 5;
 }
 
 message ListWorkersRequest {}

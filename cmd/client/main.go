@@ -66,6 +66,24 @@ func main() {
 func submitCommand(client forgev1.ForgeClient, args []string) {
 	fs := flag.NewFlagSet("submit", flag.ExitOnError)
 
+	cpu := fs.Float64(
+		"cpu",
+		0,
+		"requested CPU cores",
+	)
+
+	memoryMB := fs.Int64(
+		"memory-mb",
+		0,
+		"requested memory in MB",
+	)
+
+	gpus := fs.Int(
+		"gpus",
+		0,
+		"requested GPU count",
+	)
+
 	priority := fs.Int("priority", 2, "job priority")
 	maxAttempts := fs.Int("max-attempts", 3, "maximum execution attempts")
 	idempotencyKey := fs.String(
@@ -91,6 +109,11 @@ func submitCommand(client forgev1.ForgeClient, args []string) {
 			Priority:       int32(*priority),
 			MaxAttempts:    int32(*maxAttempts),
 			IdempotencyKey: *idempotencyKey,
+			Resources: &forgev1.ResourceVector{
+				CpuCores: *cpu,
+				MemoryMb: *memoryMB,
+				Gpus:     int32(*gpus),
+			},
 		},
 	)
 	if err != nil {
@@ -101,6 +124,9 @@ func submitCommand(client forgev1.ForgeClient, args []string) {
 	fmt.Printf("ID:       %s\n", response.JobId)
 	fmt.Printf("Command:  %s\n", command)
 	fmt.Printf("Priority: %d\n", *priority)
+	fmt.Printf("CPU:      %.2f cores\n", *cpu)
+	fmt.Printf("Memory:   %d MB\n", *memoryMB)
+	fmt.Printf("GPUs:     %d\n", *gpus)
 }
 
 func statusCommand(client forgev1.ForgeClient, args []string) {
@@ -138,6 +164,15 @@ func statusCommand(client forgev1.ForgeClient, args []string) {
 
 	if job.Error != "" {
 		fmt.Printf("Error:        %s\n", job.Error)
+	}
+
+	if job.Resources != nil {
+		fmt.Printf(
+			"Resources:    CPU %.2f | RAM %d MB | GPU %d\n",
+			job.Resources.CpuCores,
+			job.Resources.MemoryMb,
+			job.Resources.Gpus,
+		)
 	}
 }
 
