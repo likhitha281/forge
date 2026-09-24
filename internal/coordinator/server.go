@@ -69,6 +69,64 @@ func resourceFromPB(v *forgev1.ResourceVector) resource.Vector {
 	}
 }
 
+func jobResourcesPB(
+	r resource.JobResources,
+) *forgev1.JobResources {
+	return &forgev1.JobResources{
+		CpuCores: r.CPUCores,
+		MemoryMb: r.MemoryMB,
+		Gpu: &forgev1.GPUEnvelope{
+			Min:       r.GPU.Min,
+			Preferred: r.GPU.Preferred,
+			Max:       r.GPU.Max,
+		},
+	}
+}
+
+func jobResourcesFromPB(
+	r *forgev1.JobResources,
+) resource.JobResources {
+	if r == nil {
+		return resource.JobResources{}
+	}
+
+	var gpu resource.GPUEnvelope
+
+	if r.Gpu != nil {
+		gpu = resource.GPUEnvelope{
+			Min:       r.Gpu.Min,
+			Preferred: r.Gpu.Preferred,
+			Max:       r.Gpu.Max,
+		}
+	}
+
+	return resource.JobResources{
+		CPUCores: r.CpuCores,
+		MemoryMB: r.MemoryMb,
+		GPU:      gpu,
+	}
+}
+
+// fixedJobResources converts the legacy fixed ResourceVector request into
+// the new malleable representation.
+//
+// A fixed request for N GPUs is represented as:
+//
+//	min = preferred = max = N
+func fixedJobResources(
+	v resource.Vector,
+) resource.JobResources {
+	return resource.JobResources{
+		CPUCores: v.CPUCores,
+		MemoryMB: v.MemoryMB,
+		GPU: resource.GPUEnvelope{
+			Min:       v.GPUs,
+			Preferred: v.GPUs,
+			Max:       v.GPUs,
+		},
+	}
+}
+
 // pb converts the persistent storage representation of a job into the
 // protobuf representation returned to clients and workers.
 func pb(job storage.Job) *forgev1.Job {
@@ -81,15 +139,32 @@ func pb(job storage.Job) *forgev1.Job {
 		Error:       job.Error,
 		WorkerId:    job.WorkerID,
 		MaxAttempts: int32(job.MaxAttempts),
-		Resources:   resourcePB(job.Resources),
+
+		Requirements: jobResourcesPB(job.Requirements),
+	}
+
+	// Keep the legacy ResourceVector populated using the preferred
+	// configuration so older clients still receive meaningful data.
+	result.Resources = resourcePB(
+		job.Requirements.Preferred(),
+	)
+
+	if job.Allocation != nil {
+		result.Allocation = resourcePB(
+			*job.Allocation,
+		)
 	}
 
 	if !job.CreatedAt.IsZero() {
-		result.CreatedAt = job.CreatedAt.Format(time.RFC3339)
+		result.CreatedAt = job.CreatedAt.Format(
+			time.RFC3339,
+		)
 	}
 
 	if !job.UpdatedAt.IsZero() {
-		result.UpdatedAt = job.UpdatedAt.Format(time.RFC3339)
+		result.UpdatedAt = job.UpdatedAt.Format(
+			time.RFC3339,
+		)
 	}
 
 	return result
@@ -106,12 +181,36 @@ func (s *Server) SubmitJob(
 		)
 	}
 
-	resources := resourceFromPB(request.Resources)
+	var requirements resource.JobResources
 
-	if err := resources.Validate(); err != nil {
+	// Prefer the new malleable requirements API.
+	if request.Requirements != nil {
+		requirements = jobResourcesFromPB(
+			request.Requirements,
+		)
+	} else {
+		// Backwards compatibility with Step-1 clients.
+		legacy := resourceFromPB(
+			request.Resources,
+		)
+
+		if err := legacy.Validate(); err != nil {
+			return nil, status.Errorf(
+				codes.InvalidArgument,
+				"invalid resources: %v",
+				err,
+			)
+		}
+
+		requirements = fixedJobResources(
+			legacy,
+		)
+	}
+
+	if err := requirements.Validate(); err != nil {
 		return nil, status.Errorf(
 			codes.InvalidArgument,
-			"invalid resources: %v",
+			"invalid resource requirements: %v",
 			err,
 		)
 	}
@@ -125,7 +224,7 @@ func (s *Server) SubmitJob(
 		request.IdempotencyKey,
 		int(request.Priority),
 		int(request.MaxAttempts),
-		resources,
+		requirements,
 	)
 	if err != nil {
 		return nil, err

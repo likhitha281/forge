@@ -38,7 +38,7 @@ services:
       WORKER_CAPACITY: "4"
       WORKER_CPU_CORES: "8"
       WORKER_MEMORY_MB: "16384"
-      WORKER_GPUS: "0"
+      WORKER_GPUS: "2"
     depends_on:
       - coordinator
 

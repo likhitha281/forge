@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -25,7 +26,32 @@ type Job struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 
-	Resources resource.Vector
+	Requirements resource.JobResources
+	Allocation   *resource.Vector
+}
+
+type nullableAllocation struct {
+	CPU    sql.NullFloat64
+	Memory sql.NullInt64
+	GPU    sql.NullInt32
+}
+
+func (a nullableAllocation) Vector() *resource.Vector {
+	if !a.CPU.Valid && !a.Memory.Valid && !a.GPU.Valid {
+		return nil
+	}
+
+	// Allocations are written and cleared atomically as a group.
+	// A partially NULL allocation represents corrupt/inconsistent state.
+	if !a.CPU.Valid || !a.Memory.Valid || !a.GPU.Valid {
+		return nil
+	}
+
+	return &resource.Vector{
+		CPUCores: a.CPU.Float64,
+		MemoryMB: a.Memory.Int64,
+		GPUs:     a.GPU.Int32,
+	}
 }
 
 type Worker struct {
@@ -57,9 +83,9 @@ func (s *Store) Submit(
 	key string,
 	priority int,
 	maxAttempts int,
-	resources resource.Vector,
+	requirements resource.JobResources,
 ) (string, error) {
-	if err := resources.Validate(); err != nil {
+	if err := requirements.Validate(); err != nil {
 		return "", err
 	}
 
@@ -80,9 +106,15 @@ func (s *Store) Submit(
 			max_attempts,
 			cpu_cores,
 			memory_mb,
-			gpu_count
+			gpu_count,
+			gpu_min,
+			gpu_preferred,
+			gpu_max
 		)
-		VALUES($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
+		VALUES(
+			$1, $2, $3, NULLIF($4, ''), $5,
+			$6, $7, $8, $9, $10, $11
+		)
 		ON CONFLICT(idempotency_key)
 		DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
 		RETURNING id::text
@@ -92,16 +124,28 @@ func (s *Store) Submit(
 		priority,
 		key,
 		maxAttempts,
-		resources.CPUCores,
-		resources.MemoryMB,
-		resources.GPUs,
+		requirements.CPUCores,
+		requirements.MemoryMB,
+
+		// gpu_count is retained temporarily for compatibility with the
+		// Step-1 schema. Preferred is the closest representation of the
+		// old fixed GPU request.
+		requirements.GPU.Preferred,
+
+		requirements.GPU.Min,
+		requirements.GPU.Preferred,
+		requirements.GPU.Max,
 	).Scan(&jobID)
 
 	return jobID, err
 }
 
-func (s *Store) Get(ctx context.Context, id string) (Job, error) {
+func (s *Store) Get(
+	ctx context.Context,
+	id string,
+) (Job, error) {
 	var job Job
+	var allocation nullableAllocation
 
 	err := s.DB.QueryRow(
 		ctx,
@@ -117,9 +161,16 @@ func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 			COALESCE(worker_id, ''),
 			created_at,
 			updated_at,
+
 			cpu_cores,
 			memory_mb,
-			gpu_count
+			gpu_min,
+			gpu_preferred,
+			gpu_max,
+
+			allocated_cpu_cores,
+			allocated_memory_mb,
+			allocated_gpu_count
 		FROM jobs
 		WHERE id = $1
 		`,
@@ -135,15 +186,30 @@ func (s *Store) Get(ctx context.Context, id string) (Job, error) {
 		&job.WorkerID,
 		&job.CreatedAt,
 		&job.UpdatedAt,
-		&job.Resources.CPUCores,
-		&job.Resources.MemoryMB,
-		&job.Resources.GPUs,
-	)
 
-	return job, err
+		&job.Requirements.CPUCores,
+		&job.Requirements.MemoryMB,
+		&job.Requirements.GPU.Min,
+		&job.Requirements.GPU.Preferred,
+		&job.Requirements.GPU.Max,
+
+		&allocation.CPU,
+		&allocation.Memory,
+		&allocation.GPU,
+	)
+	if err != nil {
+		return Job{}, err
+	}
+
+	job.Allocation = allocation.Vector()
+
+	return job, nil
 }
 
-func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
+func (s *Store) ListJobs(
+	ctx context.Context,
+	limit int,
+) ([]Job, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -166,9 +232,16 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 			COALESCE(worker_id, ''),
 			created_at,
 			updated_at,
+
 			cpu_cores,
 			memory_mb,
-			gpu_count
+			gpu_min,
+			gpu_preferred,
+			gpu_max,
+
+			allocated_cpu_cores,
+			allocated_memory_mb,
+			allocated_gpu_count
 		FROM jobs
 		ORDER BY created_at DESC
 		LIMIT $1
@@ -184,6 +257,7 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 
 	for rows.Next() {
 		var job Job
+		var allocation nullableAllocation
 
 		if err := rows.Scan(
 			&job.ID,
@@ -196,13 +270,21 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 			&job.WorkerID,
 			&job.CreatedAt,
 			&job.UpdatedAt,
-			&job.Resources.CPUCores,
-			&job.Resources.MemoryMB,
-			&job.Resources.GPUs,
+
+			&job.Requirements.CPUCores,
+			&job.Requirements.MemoryMB,
+			&job.Requirements.GPU.Min,
+			&job.Requirements.GPU.Preferred,
+			&job.Requirements.GPU.Max,
+
+			&allocation.CPU,
+			&allocation.Memory,
+			&allocation.GPU,
 		); err != nil {
 			return nil, err
 		}
 
+		job.Allocation = allocation.Vector()
 		jobs = append(jobs, job)
 	}
 
@@ -213,7 +295,10 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]Job, error) {
 	return jobs, nil
 }
 
-func (s *Store) CancelJob(ctx context.Context, id string) (bool, error) {
+func (s *Store) CancelJob(
+	ctx context.Context,
+	id string,
+) (bool, error) {
 	result, err := s.DB.Exec(
 		ctx,
 		`
@@ -222,6 +307,9 @@ func (s *Store) CancelJob(ctx context.Context, id string) (bool, error) {
 			status = 'CANCELLED',
 			worker_id = NULL,
 			lease_until = NULL,
+			allocated_cpu_cores = NULL,
+			allocated_memory_mb = NULL,
+			allocated_gpu_count = NULL,
 			updated_at = now()
 		WHERE id = $1
 		  AND status = 'QUEUED'
@@ -299,7 +387,9 @@ func (s *Store) Heartbeat(
 	return err
 }
 
-func (s *Store) ListWorkers(ctx context.Context) ([]Worker, error) {
+func (s *Store) ListWorkers(
+	ctx context.Context,
+) ([]Worker, error) {
 	rows, err := s.DB.Query(
 		ctx,
 		`
@@ -358,11 +448,10 @@ func (s *Store) Lease(
 	}
 	defer tx.Rollback(ctx)
 
-	// Lock the worker row for the entire scheduling decision.
+	// Serialize scheduling decisions for this worker.
 	//
-	// This serializes concurrent Lease calls for the same worker. Without
-	// this lock, multiple goroutines could observe the same available
-	// resources and collectively oversubscribe the worker.
+	// Without this worker-row lock, concurrent Lease calls could observe
+	// the same available resources and collectively oversubscribe them.
 	var capacity resource.Vector
 	var maxConcurrent int
 
@@ -389,11 +478,9 @@ func (s *Store) Lease(
 		return Job{}, err
 	}
 
-	// Derive current resource allocation from RUNNING jobs.
-	//
-	// RUNNING jobs are the authoritative source of allocation state. This
-	// avoids maintaining a separate mutable allocation counter that could
-	// drift out of sync after failures or coordinator restarts.
+	// Capacity accounting is based on concrete allocations, not preferred
+	// resource requirements. This distinction is what allows malleable jobs
+	// to execute at degraded GPU allocations.
 	var allocated resource.Vector
 	var runningJobs int
 
@@ -402,9 +489,9 @@ func (s *Store) Lease(
 		`
 		SELECT
 			COUNT(*),
-			COALESCE(SUM(cpu_cores), 0),
-			COALESCE(SUM(memory_mb), 0),
-			COALESCE(SUM(gpu_count), 0)
+			COALESCE(SUM(allocated_cpu_cores), 0),
+			COALESCE(SUM(allocated_memory_mb), 0),
+			COALESCE(SUM(allocated_gpu_count), 0)
 		FROM jobs
 		WHERE status = 'RUNNING'
 		  AND worker_id = $1
@@ -420,8 +507,6 @@ func (s *Store) Lease(
 		return Job{}, err
 	}
 
-	// Preserve the existing worker concurrency-slot limit in addition to
-	// resource-based scheduling.
 	if runningJobs >= maxConcurrent {
 		return Job{}, ErrNoLeasableJob
 	}
@@ -435,11 +520,9 @@ func (s *Store) Lease(
 
 	var job Job
 
-	// Select the highest-priority queued job that fits the worker's
-	// currently available resources.
-	//
-	// SKIP LOCKED allows different workers to lease different jobs
-	// concurrently while avoiding duplicate ownership.
+	// A malleable job is eligible if its fixed CPU/memory requirements and
+	// minimum GPU requirement fit. Preferred/max GPU counts do not determine
+	// eligibility.
 	err = tx.QueryRow(
 		ctx,
 		`
@@ -453,12 +536,14 @@ func (s *Store) Lease(
 			COALESCE(error, ''),
 			cpu_cores,
 			memory_mb,
-			gpu_count
+			gpu_min,
+			gpu_preferred,
+			gpu_max
 		FROM jobs
 		WHERE status = 'QUEUED'
 		  AND cpu_cores <= $1
 		  AND memory_mb <= $2
-		  AND gpu_count <= $3
+		  AND gpu_min <= $3
 		ORDER BY priority ASC, created_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
@@ -474,9 +559,11 @@ func (s *Store) Lease(
 		&job.Attempts,
 		&job.MaxAttempts,
 		&job.Error,
-		&job.Resources.CPUCores,
-		&job.Resources.MemoryMB,
-		&job.Resources.GPUs,
+		&job.Requirements.CPUCores,
+		&job.Requirements.MemoryMB,
+		&job.Requirements.GPU.Min,
+		&job.Requirements.GPU.Preferred,
+		&job.Requirements.GPU.Max,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -487,6 +574,14 @@ func (s *Store) Lease(
 		return Job{}, err
 	}
 
+	allocation, ok := job.Requirements.InitialAllocation(available)
+	if !ok {
+		return Job{}, errors.New(
+			"scheduler invariant violated: selected job cannot fit available resources",
+		)
+	}
+
+	// Assignment and concrete allocation are persisted atomically.
 	_, err = tx.Exec(
 		ctx,
 		`
@@ -496,12 +591,18 @@ func (s *Store) Lease(
 			worker_id = $2,
 			lease_until = now() + $3::interval,
 			attempts = attempts + 1,
+			allocated_cpu_cores = $4,
+			allocated_memory_mb = $5,
+			allocated_gpu_count = $6,
 			updated_at = now()
 		WHERE id = $1
 		`,
 		job.ID,
 		worker,
 		lease.String(),
+		allocation.CPUCores,
+		allocation.MemoryMB,
+		allocation.GPUs,
 	)
 	if err != nil {
 		return Job{}, err
@@ -510,6 +611,7 @@ func (s *Store) Lease(
 	job.Status = "RUNNING"
 	job.WorkerID = worker
 	job.Attempts++
+	job.Allocation = &allocation
 
 	if err := tx.Commit(ctx); err != nil {
 		return Job{}, err
@@ -538,6 +640,9 @@ func (s *Store) Complete(
 			status = $2,
 			error = NULLIF($3, ''),
 			lease_until = NULL,
+			allocated_cpu_cores = NULL,
+			allocated_memory_mb = NULL,
+			allocated_gpu_count = NULL,
 			updated_at = now()
 		WHERE id = $1
 		`,
@@ -549,7 +654,9 @@ func (s *Store) Complete(
 	return err
 }
 
-func (s *Store) Requeue(ctx context.Context) error {
+func (s *Store) Requeue(
+	ctx context.Context,
+) error {
 	_, err := s.DB.Exec(
 		ctx,
 		`
@@ -561,6 +668,9 @@ func (s *Store) Requeue(ctx context.Context) error {
 			END,
 			worker_id = NULL,
 			lease_until = NULL,
+			allocated_cpu_cores = NULL,
+			allocated_memory_mb = NULL,
+			allocated_gpu_count = NULL,
 			error = CASE
 				WHEN attempts < max_attempts THEN error
 				ELSE COALESCE(error, 'lease expired')

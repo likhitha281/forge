@@ -81,6 +81,16 @@ func submitTestJob(
 
 	id := uuid.NewString()
 
+	requirements := resource.JobResources{
+		CPUCores: resources.CPUCores,
+		MemoryMB: resources.MemoryMB,
+		GPU: resource.GPUEnvelope{
+			Min:       resources.GPUs,
+			Preferred: resources.GPUs,
+			Max:       resources.GPUs,
+		},
+	}
+
 	jobID, err := store.Submit(
 		context.Background(),
 		id,
@@ -88,7 +98,7 @@ func submitTestJob(
 		"",
 		priority,
 		3,
-		resources,
+		requirements,
 	)
 	if err != nil {
 		t.Fatalf("submit job: %v", err)
@@ -473,6 +483,88 @@ func TestConcurrentLeaseDoesNotOversubscribeWorker(t *testing.T) {
 		t.Fatalf(
 			"running jobs = %d, want exactly 4",
 			running,
+		)
+	}
+}
+
+func TestLeaseMalleableJobAtDegradedGPUAllocation(
+	t *testing.T,
+) {
+	store := testStore(t)
+
+	registerTestWorker(
+		t,
+		store,
+		"worker-1",
+		4,
+		resource.Vector{
+			CPUCores: 8,
+			MemoryMB: 16384,
+			GPUs:     2,
+		},
+	)
+
+	id := uuid.NewString()
+
+	_, err := store.Submit(
+		context.Background(),
+		id,
+		"python train.py",
+		"",
+		2,
+		3,
+		resource.JobResources{
+			CPUCores: 4,
+			MemoryMB: 8192,
+			GPU: resource.GPUEnvelope{
+				Min:       1,
+				Preferred: 4,
+				Max:       8,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Submit() error: %v", err)
+	}
+
+	job, err := store.Lease(
+		context.Background(),
+		"worker-1",
+		30*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("Lease() error: %v", err)
+	}
+
+	if job.Allocation == nil {
+		t.Fatal("expected concrete allocation")
+	}
+
+	if job.Allocation.GPUs != 2 {
+		t.Fatalf(
+			"allocated GPUs = %d, want 2",
+			job.Allocation.GPUs,
+		)
+	}
+
+	if job.Requirements.GPU.Min != 1 {
+		t.Fatalf(
+			"minimum GPUs = %d, want 1",
+			job.Requirements.GPU.Min,
+		)
+	}
+
+	if job.Requirements.GPU.Preferred != 4 {
+		t.Fatalf(
+			"preferred GPUs = %d, want 4",
+			job.Requirements.GPU.Preferred,
+		)
+	}
+
+	if job.Requirements.GPU.Max != 8 {
+		t.Fatalf(
+			"maximum GPUs = %d, want 8",
+			job.Requirements.GPU.Max,
 		)
 	}
 }

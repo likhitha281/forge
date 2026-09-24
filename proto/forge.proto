@@ -55,6 +55,8 @@ message Job {
   string updated_at = 10;
 
   ResourceVector resources = 11;
+  JobResources requirements = 12;
+  ResourceVector allocation = 13;
 }
 
 message SubmitJobRequest {
@@ -64,6 +66,7 @@ message SubmitJobRequest {
   int32 max_attempts = 4;
 
   ResourceVector resources = 5;
+  JobResources requirements = 6;
 }
 
 message SubmitJobResponse {
@@ -159,4 +162,16 @@ message RenewLeaseRequest {
 message RenewLeaseResponse {
   bool renewed = 1;
   int32 lease_seconds = 2;
+}
+
+message GPUEnvelope {
+  int32 min = 1;
+  int32 preferred = 2;
+  int32 max = 3;
+}
+
+message JobResources {
+  double cpu_cores = 1;
+  int64 memory_mb = 2;
+  GPUEnvelope gpu = 3;
 }

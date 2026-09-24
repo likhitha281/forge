@@ -78,14 +78,44 @@ func submitCommand(client forgev1.ForgeClient, args []string) {
 		"requested memory in MB",
 	)
 
+	// Legacy/fixed GPU allocation.
 	gpus := fs.Int(
 		"gpus",
 		0,
-		"requested GPU count",
+		"requested fixed GPU count",
 	)
 
-	priority := fs.Int("priority", 2, "job priority")
-	maxAttempts := fs.Int("max-attempts", 3, "maximum execution attempts")
+	// Malleable GPU allocation envelope.
+	gpuMin := fs.Int(
+		"gpu-min",
+		-1,
+		"minimum GPU count for a malleable job",
+	)
+
+	gpuPreferred := fs.Int(
+		"gpu-preferred",
+		-1,
+		"preferred GPU count for a malleable job",
+	)
+
+	gpuMax := fs.Int(
+		"gpu-max",
+		-1,
+		"maximum GPU count for a malleable job",
+	)
+
+	priority := fs.Int(
+		"priority",
+		2,
+		"job priority",
+	)
+
+	maxAttempts := fs.Int(
+		"max-attempts",
+		3,
+		"maximum execution attempts",
+	)
+
 	idempotencyKey := fs.String(
 		"idempotency-key",
 		"",
@@ -93,7 +123,7 @@ func submitCommand(client forgev1.ForgeClient, args []string) {
 	)
 
 	if len(args) == 0 {
-		log.Fatal(`usage: forge submit "command" --priority 2`)
+		log.Fatal(`usage: forge submit "command" [options]`)
 	}
 
 	command := args[0]
@@ -102,19 +132,75 @@ func submitCommand(client forgev1.ForgeClient, args []string) {
 		log.Fatal(err)
 	}
 
+	if *cpu < 0 {
+		log.Fatal("--cpu cannot be negative")
+	}
+
+	if *memoryMB < 0 {
+		log.Fatal("--memory-mb cannot be negative")
+	}
+
+	if *gpus < 0 {
+		log.Fatal("--gpus cannot be negative")
+	}
+
+	malleableSpecified :=
+		*gpuMin >= 0 ||
+			*gpuPreferred >= 0 ||
+			*gpuMax >= 0
+
+	if malleableSpecified {
+		if *gpuMin < 0 ||
+			*gpuPreferred < 0 ||
+			*gpuMax < 0 {
+			log.Fatal(
+				"--gpu-min, --gpu-preferred, and --gpu-max must be specified together",
+			)
+		}
+
+		if *gpuMin > *gpuPreferred {
+			log.Fatal(
+				"--gpu-min cannot exceed --gpu-preferred",
+			)
+		}
+
+		if *gpuPreferred > *gpuMax {
+			log.Fatal(
+				"--gpu-preferred cannot exceed --gpu-max",
+			)
+		}
+	}
+
+	request := &forgev1.SubmitJobRequest{
+		Payload:        command,
+		Priority:       int32(*priority),
+		MaxAttempts:    int32(*maxAttempts),
+		IdempotencyKey: *idempotencyKey,
+	}
+
+	if malleableSpecified {
+		// New malleable-resource API.
+		request.Requirements = &forgev1.JobResources{
+			CpuCores: *cpu,
+			MemoryMb: *memoryMB,
+			Gpu: &forgev1.GPUEnvelope{
+				Min:       int32(*gpuMin),
+				Preferred: int32(*gpuPreferred),
+				Max:       int32(*gpuMax),
+			},
+		}
+	} else {
+		// Backwards-compatible fixed-resource API.
+		request.Resources = &forgev1.ResourceVector{
+			CpuCores: *cpu,
+			MemoryMb: *memoryMB,
+			Gpus:     int32(*gpus),
+		}
+	}
+
 	response, err := client.SubmitJob(
 		context.Background(),
-		&forgev1.SubmitJobRequest{
-			Payload:        command,
-			Priority:       int32(*priority),
-			MaxAttempts:    int32(*maxAttempts),
-			IdempotencyKey: *idempotencyKey,
-			Resources: &forgev1.ResourceVector{
-				CpuCores: *cpu,
-				MemoryMb: *memoryMB,
-				Gpus:     int32(*gpus),
-			},
-		},
+		request,
 	)
 	if err != nil {
 		log.Fatalf("submit job: %v", err)
@@ -126,7 +212,17 @@ func submitCommand(client forgev1.ForgeClient, args []string) {
 	fmt.Printf("Priority: %d\n", *priority)
 	fmt.Printf("CPU:      %.2f cores\n", *cpu)
 	fmt.Printf("Memory:   %d MB\n", *memoryMB)
-	fmt.Printf("GPUs:     %d\n", *gpus)
+
+	if malleableSpecified {
+		fmt.Printf(
+			"GPUs:     min=%d preferred=%d max=%d\n",
+			*gpuMin,
+			*gpuPreferred,
+			*gpuMax,
+		)
+	} else {
+		fmt.Printf("GPUs:     %d (fixed)\n", *gpus)
+	}
 }
 
 func statusCommand(client forgev1.ForgeClient, args []string) {
@@ -148,7 +244,11 @@ func statusCommand(client forgev1.ForgeClient, args []string) {
 	fmt.Printf("Command:      %s\n", job.Payload)
 	fmt.Printf("Priority:     %d\n", job.Priority)
 	fmt.Printf("Status:       %s\n", job.Status.String())
-	fmt.Printf("Attempts:     %d/%d\n", job.Attempts, job.MaxAttempts)
+	fmt.Printf(
+		"Attempts:     %d/%d\n",
+		job.Attempts,
+		job.MaxAttempts,
+	)
 
 	if job.WorkerId != "" {
 		fmt.Printf("Worker:       %s\n", job.WorkerId)
@@ -166,7 +266,23 @@ func statusCommand(client forgev1.ForgeClient, args []string) {
 		fmt.Printf("Error:        %s\n", job.Error)
 	}
 
-	if job.Resources != nil {
+	if job.Requirements != nil {
+		fmt.Printf(
+			"Requirements: CPU %.2f | RAM %d MB\n",
+			job.Requirements.CpuCores,
+			job.Requirements.MemoryMb,
+		)
+
+		if job.Requirements.Gpu != nil {
+			fmt.Printf(
+				"GPU envelope: min=%d preferred=%d max=%d\n",
+				job.Requirements.Gpu.Min,
+				job.Requirements.Gpu.Preferred,
+				job.Requirements.Gpu.Max,
+			)
+		}
+	} else if job.Resources != nil {
+		// Compatibility with older coordinator responses.
 		fmt.Printf(
 			"Resources:    CPU %.2f | RAM %d MB | GPU %d\n",
 			job.Resources.CpuCores,
@@ -174,12 +290,27 @@ func statusCommand(client forgev1.ForgeClient, args []string) {
 			job.Resources.Gpus,
 		)
 	}
+
+	if job.Allocation != nil {
+		fmt.Printf(
+			"Allocation:   CPU %.2f | RAM %d MB | GPU %d\n",
+			job.Allocation.CpuCores,
+			job.Allocation.MemoryMb,
+			job.Allocation.Gpus,
+		)
+	} else {
+		fmt.Println("Allocation:   none")
+	}
 }
 
 func jobsCommand(client forgev1.ForgeClient, args []string) {
 	fs := flag.NewFlagSet("jobs", flag.ExitOnError)
 
-	limit := fs.Int("limit", 20, "maximum jobs to return")
+	limit := fs.Int(
+		"limit",
+		20,
+		"maximum jobs to return",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -201,12 +332,13 @@ func jobsCommand(client forgev1.ForgeClient, args []string) {
 	}
 
 	fmt.Printf(
-		"%-10s  %-11s %-8s %-10s %-14s %s\n",
+		"%-12s %-11s %-8s %-10s %-14s %-10s %s\n",
 		"JOB",
 		"STATUS",
 		"PRIORITY",
 		"ATTEMPTS",
 		"WORKER",
+		"GPU",
 		"COMMAND",
 	)
 
@@ -221,13 +353,35 @@ func jobsCommand(client forgev1.ForgeClient, args []string) {
 			command = command[:32] + "..."
 		}
 
+		gpuText := "-"
+
+		if job.Allocation != nil {
+			gpuText = fmt.Sprintf(
+				"%d",
+				job.Allocation.Gpus,
+			)
+		} else if job.Requirements != nil &&
+			job.Requirements.Gpu != nil {
+			gpuText = fmt.Sprintf(
+				"%d/%d/%d",
+				job.Requirements.Gpu.Min,
+				job.Requirements.Gpu.Preferred,
+				job.Requirements.Gpu.Max,
+			)
+		}
+
 		fmt.Printf(
-			"%-10s  %-11s %-8d %-10s %-14s %s\n",
+			"%-12s %-11s %-8d %-10s %-14s %-10s %s\n",
 			shortID(job.Id),
 			job.Status.String(),
 			job.Priority,
-			fmt.Sprintf("%d/%d", job.Attempts, job.MaxAttempts),
+			fmt.Sprintf(
+				"%d/%d",
+				job.Attempts,
+				job.MaxAttempts,
+			),
 			worker,
+			gpuText,
 			command,
 		)
 	}
@@ -248,22 +402,51 @@ func workersCommand(client forgev1.ForgeClient) {
 	}
 
 	fmt.Printf(
-		"%-14s %-10s %-10s %-10s %s\n",
+		"%-14s %-10s %-10s %-8s %-12s %-8s %-10s %s\n",
 		"WORKER",
 		"CAPACITY",
 		"RUNNING",
+		"CPU",
+		"MEMORY_MB",
+		"GPU",
 		"STATUS",
 		"HEARTBEAT",
 	)
 
 	for _, worker := range response.Workers {
-		age, health := workerHealth(worker.LastHeartbeat)
+		age, health := workerHealth(
+			worker.LastHeartbeat,
+		)
+
+		cpu := "-"
+		memory := "-"
+		gpu := "-"
+
+		if worker.Resources != nil {
+			cpu = fmt.Sprintf(
+				"%.2f",
+				worker.Resources.CpuCores,
+			)
+
+			memory = fmt.Sprintf(
+				"%d",
+				worker.Resources.MemoryMb,
+			)
+
+			gpu = fmt.Sprintf(
+				"%d",
+				worker.Resources.Gpus,
+			)
+		}
 
 		fmt.Printf(
-			"%-14s %-10d %-10d %-10s %s\n",
+			"%-14s %-10d %-10d %-8s %-12s %-8s %-10s %s\n",
 			shortID(worker.Id),
 			worker.Capacity,
 			worker.Running,
+			cpu,
+			memory,
+			gpu,
 			health,
 			age,
 		)
@@ -286,7 +469,10 @@ func cancelCommand(client forgev1.ForgeClient, args []string) {
 	}
 
 	if response.Cancelled {
-		fmt.Printf("Job %s cancelled.\n", args[0])
+		fmt.Printf(
+			"Job %s cancelled.\n",
+			args[0],
+		)
 	}
 }
 
@@ -300,7 +486,7 @@ func shortID(id string) string {
 
 func printUsage() {
 	fmt.Println(strings.TrimSpace(`
-Forge - Distributed Task Execution Engine
+Forge - Transition-Aware Distributed Execution Engine
 
 Usage:
   forge submit "COMMAND" [options]
@@ -309,16 +495,39 @@ Usage:
   forge workers
   forge cancel JOB_ID
 
-Examples:
-  forge submit "sleep 10"
-  forge submit "sleep 10" --priority 1
-  forge submit "echo hello" --priority 2 --max-attempts 5
+Fixed-resource job:
+  forge submit "sleep 30" \
+    --cpu 2 \
+    --memory-mb 2048 \
+    --gpus 1
 
-  forge status JOB_ID
-  forge jobs
-  forge jobs --limit 50
-  forge workers
-  forge cancel JOB_ID
+Malleable GPU job:
+  forge submit "sleep 30" \
+    --cpu 4 \
+    --memory-mb 8192 \
+    --gpu-min 1 \
+    --gpu-preferred 4 \
+    --gpu-max 8
+
+Submit options:
+  --cpu N              Requested CPU cores
+  --memory-mb N        Requested memory in MB
+  --gpus N             Fixed GPU count
+
+  --gpu-min N          Minimum GPU allocation
+  --gpu-preferred N    Preferred GPU allocation
+  --gpu-max N          Maximum GPU allocation
+
+  --priority N         Job priority (default 2)
+  --max-attempts N     Maximum execution attempts (default 3)
+  --idempotency-key K  Optional idempotency key
+
+Notes:
+  --gpu-min, --gpu-preferred, and --gpu-max must be
+  specified together.
+
+  Use --gpus for fixed jobs OR the GPU envelope flags
+  for malleable jobs.
 
 Environment:
   FORGE_ADDR    Coordinator address (default localhost:50051)
@@ -345,13 +554,22 @@ func workerHealth(value string) (string, string) {
 
 	switch {
 	case age < time.Minute:
-		ageText = fmt.Sprintf("%ds ago", int(age.Seconds()))
+		ageText = fmt.Sprintf(
+			"%ds ago",
+			int(age.Seconds()),
+		)
 
 	case age < time.Hour:
-		ageText = fmt.Sprintf("%dm ago", int(age.Minutes()))
+		ageText = fmt.Sprintf(
+			"%dm ago",
+			int(age.Minutes()),
+		)
 
 	default:
-		ageText = fmt.Sprintf("%dh ago", int(age.Hours()))
+		ageText = fmt.Sprintf(
+			"%dh ago",
+			int(age.Hours()),
+		)
 	}
 
 	var health string
