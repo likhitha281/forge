@@ -56,10 +56,274 @@ func main() {
 	case "help", "--help", "-h":
 		printUsage()
 
+	case "transition":
+		transitionCommand(client, os.Args[2:])
+
+	case "transition-status":
+		transitionStatusCommand(client, os.Args[2:])
+
+	case "transitions":
+		transitionsCommand(client, os.Args[2:])
+
 	default:
 		fmt.Printf("unknown command: %s\n\n", os.Args[1])
 		printUsage()
 		os.Exit(1)
+	}
+}
+
+func transitionCommand(
+	client forgev1.ForgeClient,
+	args []string,
+) {
+	fs := flag.NewFlagSet(
+		"transition",
+		flag.ExitOnError,
+	)
+
+	gpus := fs.Int(
+		"gpus",
+		-1,
+		"target GPU allocation",
+	)
+
+	if len(args) == 0 {
+		log.Fatal(
+			"usage: forge transition JOB_ID --gpus N",
+		)
+	}
+
+	jobID := args[0]
+
+	if err := fs.Parse(args[1:]); err != nil {
+		log.Fatal(err)
+	}
+
+	if *gpus < 0 {
+		log.Fatal("--gpus is required")
+	}
+
+	// Fetch the current job so CPU and memory remain unchanged.
+	job, err := client.GetJob(
+		context.Background(),
+		&forgev1.GetJobRequest{
+			JobId: jobID,
+		},
+	)
+	if err != nil {
+		log.Fatalf(
+			"get job before transition: %v",
+			err,
+		)
+	}
+
+	if job.Allocation == nil {
+		log.Fatal(
+			"job has no active allocation; only RUNNING jobs can transition",
+		)
+	}
+
+	target := &forgev1.ResourceVector{
+		CpuCores: job.Allocation.CpuCores,
+		MemoryMb: job.Allocation.MemoryMb,
+		Gpus:     int32(*gpus),
+	}
+
+	response, err := client.RequestTransition(
+		context.Background(),
+		&forgev1.RequestTransitionRequest{
+			JobId:  jobID,
+			Target: target,
+		},
+	)
+	if err != nil {
+		log.Fatalf(
+			"request transition: %v",
+			err,
+		)
+	}
+
+	tr := response.Transition
+
+	fmt.Println("Transition requested successfully")
+	fmt.Printf("ID:      %s\n", tr.Id)
+	fmt.Printf("Job:     %s\n", tr.JobId)
+	fmt.Printf("State:   %s\n", tr.State.String())
+
+	if tr.Source != nil {
+		fmt.Printf(
+			"Source:  CPU %.2f | RAM %d MB | GPU %d\n",
+			tr.Source.CpuCores,
+			tr.Source.MemoryMb,
+			tr.Source.Gpus,
+		)
+	}
+
+	if tr.Target != nil {
+		fmt.Printf(
+			"Target:  CPU %.2f | RAM %d MB | GPU %d\n",
+			tr.Target.CpuCores,
+			tr.Target.MemoryMb,
+			tr.Target.Gpus,
+		)
+	}
+
+	if tr.RequestedAt != "" {
+		fmt.Printf(
+			"Created: %s\n",
+			tr.RequestedAt,
+		)
+	}
+}
+
+func transitionStatusCommand(
+	client forgev1.ForgeClient,
+	args []string,
+) {
+	if len(args) != 1 {
+		log.Fatal(
+			"usage: forge transition-status TRANSITION_ID",
+		)
+	}
+
+	tr, err := client.GetTransition(
+		context.Background(),
+		&forgev1.GetTransitionRequest{
+			TransitionId: args[0],
+		},
+	)
+	if err != nil {
+		log.Fatalf(
+			"get transition: %v",
+			err,
+		)
+	}
+
+	printTransition(tr)
+}
+
+func transitionsCommand(
+	client forgev1.ForgeClient,
+	args []string,
+) {
+	if len(args) != 1 {
+		log.Fatal(
+			"usage: forge transitions JOB_ID",
+		)
+	}
+
+	response, err := client.ListJobTransitions(
+		context.Background(),
+		&forgev1.ListJobTransitionsRequest{
+			JobId: args[0],
+		},
+	)
+	if err != nil {
+		log.Fatalf(
+			"list transitions: %v",
+			err,
+		)
+	}
+
+	if len(response.Transitions) == 0 {
+		fmt.Println("No transitions found.")
+		return
+	}
+
+	fmt.Printf(
+		"%-12s %-18s %-8s %-8s %-26s\n",
+		"TRANSITION",
+		"STATE",
+		"SOURCE",
+		"TARGET",
+		"REQUESTED",
+	)
+
+	for _, tr := range response.Transitions {
+		source := "-"
+		target := "-"
+
+		if tr.Source != nil {
+			source = fmt.Sprintf(
+				"%d GPU",
+				tr.Source.Gpus,
+			)
+		}
+
+		if tr.Target != nil {
+			target = fmt.Sprintf(
+				"%d GPU",
+				tr.Target.Gpus,
+			)
+		}
+
+		fmt.Printf(
+			"%-12s %-18s %-8s %-8s %-26s\n",
+			shortID(tr.Id),
+			tr.State.String(),
+			source,
+			target,
+			tr.RequestedAt,
+		)
+	}
+}
+
+func printTransition(
+	tr *forgev1.Transition,
+) {
+	fmt.Printf("ID:        %s\n", tr.Id)
+	fmt.Printf("Job:       %s\n", tr.JobId)
+	fmt.Printf("State:     %s\n", tr.State.String())
+
+	if tr.Source != nil {
+		fmt.Printf(
+			"Source:    CPU %.2f | RAM %d MB | GPU %d\n",
+			tr.Source.CpuCores,
+			tr.Source.MemoryMb,
+			tr.Source.Gpus,
+		)
+	}
+
+	if tr.Target != nil {
+		fmt.Printf(
+			"Target:    CPU %.2f | RAM %d MB | GPU %d\n",
+			tr.Target.CpuCores,
+			tr.Target.MemoryMb,
+			tr.Target.Gpus,
+		)
+	}
+
+	if tr.RequestedAt != "" {
+		fmt.Printf(
+			"Requested: %s\n",
+			tr.RequestedAt,
+		)
+	}
+
+	if tr.StartedAt != "" {
+		fmt.Printf(
+			"Started:   %s\n",
+			tr.StartedAt,
+		)
+	}
+
+	if tr.CompletedAt != "" {
+		fmt.Printf(
+			"Completed: %s\n",
+			tr.CompletedAt,
+		)
+	}
+
+	fmt.Printf(
+		"Bytes moved: %d\n",
+		tr.BytesMoved,
+	)
+
+	if tr.FailureReason != "" {
+		fmt.Printf(
+			"Failure:   %s\n",
+			tr.FailureReason,
+		)
 	}
 }
 
@@ -494,6 +758,14 @@ Usage:
   forge jobs [--limit N]
   forge workers
   forge cancel JOB_ID
+
+  forge transition JOB_ID --gpus N
+  forge transition-status TRANSITION_ID
+  forge transitions JOB_ID
+
+  forge transition JOB_ID --gpus 4
+  forge transition-status TRANSITION_ID
+  forge transitions JOB_ID
 
 Fixed-resource job:
   forge submit "sleep 30" \

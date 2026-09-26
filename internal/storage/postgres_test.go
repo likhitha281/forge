@@ -43,7 +43,7 @@ func resetTestData(t *testing.T, store *Store) {
 	_, err := store.DB.Exec(
 		context.Background(),
 		`
-		TRUNCATE TABLE jobs, workers;
+		TRUNCATE TABLE transitions, jobs, workers;
 		`,
 	)
 	if err != nil {

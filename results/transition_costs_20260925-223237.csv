@@ -1,0 +1,4 @@
+"timestamp_utc","job_id","transition_id","trial","state_mb","source_gpu","target_gpu","gpu_delta","direction","state","prepare_us","checkpoint_us","reconfigure_us","restore_us","resume_us","total_us","checkpoint_bytes","restore_bytes","bytes_moved"
+"2026-09-26T05:32:41.9930881Z","4a53500b-5acf-46fb-849b-c3ebfb102188","3e9843c9-4ccb-4ff2-8b51-2fefa85b3209","1","16","1","2","1","grow","COMPLETED","0","65000","0","25000","0","90000","16777224","16777224","33554448"
+"2026-09-26T05:33:12.0368454Z","53085e64-40f1-4511-9b48-a2e0384070a8","384685b0-9219-4af6-b71e-79d15d56c2f3","1","16","2","4","2","grow","COMPLETED","0","45000","0","25000","0","70000","16777224","16777224","33554448"
+"2026-09-26T05:33:47.4076218Z","a0019958-d463-480f-b56c-4d1326bb34d0","71508a67-a183-4a07-bc44-8bf8682a6cf3","1","16","4","2","-2","shrink","COMPLETED","0","70000","0","45000","0","115000","16777224","16777224","33554448"

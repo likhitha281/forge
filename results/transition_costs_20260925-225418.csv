@@ -1,0 +1,2 @@
+"timestamp_utc","job_id","transition_id","trial","state_mb","source_gpu","target_gpu","gpu_delta","direction","state","prepare_us","checkpoint_us","reconfigure_us","restore_us","resume_us","total_us","checkpoint_bytes","restore_bytes","bytes_moved"
+"2026-09-26T05:54:27.0663433Z","7a073657-2a00-4776-836c-5ba09cc36ed4","09d9daa6-e072-4de4-bc05-3e8faf3553c3","1","128","1","2","1","grow","COMPLETED","0","971000","0","749000","0","1720000","134217736","134217736","268435472"

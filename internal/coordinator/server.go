@@ -12,6 +12,7 @@ import (
 	"github.com/likhitha281/forge/internal/resource"
 	"github.com/likhitha281/forge/internal/storage"
 
+	transitionmodel "github.com/likhitha281/forge/internal/transition"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -505,5 +506,531 @@ func (s *Server) RenewLease(
 	return &forgev1.RenewLeaseResponse{
 		Renewed:      true,
 		LeaseSeconds: int32(leaseDuration.Seconds()),
+	}, nil
+}
+
+func transitionStatePB(
+	state transitionmodel.State,
+) forgev1.TransitionState {
+	switch state {
+	case transitionmodel.StateRequested:
+		return forgev1.TransitionState_TRANSITION_REQUESTED
+
+	case transitionmodel.StatePreparing:
+		return forgev1.TransitionState_TRANSITION_PREPARING
+
+	case transitionmodel.StateCheckpointing:
+		return forgev1.TransitionState_TRANSITION_CHECKPOINTING
+
+	case transitionmodel.StateReconfiguring:
+		return forgev1.TransitionState_TRANSITION_RECONFIGURING
+
+	case transitionmodel.StateRestoring:
+		return forgev1.TransitionState_TRANSITION_RESTORING
+
+	case transitionmodel.StateResuming:
+		return forgev1.TransitionState_TRANSITION_RESUMING
+
+	case transitionmodel.StateCompleted:
+		return forgev1.TransitionState_TRANSITION_COMPLETED
+
+	case transitionmodel.StateFailed:
+		return forgev1.TransitionState_TRANSITION_FAILED
+
+	default:
+		return forgev1.TransitionState_TRANSITION_STATE_UNSPECIFIED
+	}
+}
+
+func transitionStateFromPB(
+	state forgev1.TransitionState,
+) (transitionmodel.State, error) {
+	switch state {
+	case forgev1.TransitionState_TRANSITION_REQUESTED:
+		return transitionmodel.StateRequested, nil
+
+	case forgev1.TransitionState_TRANSITION_PREPARING:
+		return transitionmodel.StatePreparing, nil
+
+	case forgev1.TransitionState_TRANSITION_CHECKPOINTING:
+		return transitionmodel.StateCheckpointing, nil
+
+	case forgev1.TransitionState_TRANSITION_RECONFIGURING:
+		return transitionmodel.StateReconfiguring, nil
+
+	case forgev1.TransitionState_TRANSITION_RESTORING:
+		return transitionmodel.StateRestoring, nil
+
+	case forgev1.TransitionState_TRANSITION_RESUMING:
+		return transitionmodel.StateResuming, nil
+
+	case forgev1.TransitionState_TRANSITION_COMPLETED:
+		return transitionmodel.StateCompleted, nil
+
+	case forgev1.TransitionState_TRANSITION_FAILED:
+		return transitionmodel.StateFailed, nil
+
+	default:
+		return "", errors.New(
+			"invalid transition state",
+		)
+	}
+}
+
+func transitionPB(
+	tr transitionmodel.Transition,
+) *forgev1.Transition {
+	result := &forgev1.Transition{
+		Id:            tr.ID,
+		JobId:         tr.JobID,
+		State:         transitionStatePB(tr.State),
+		Source:        resourcePB(tr.Source),
+		Target:        resourcePB(tr.Target),
+		FailureReason: tr.FailureReason,
+		BytesMoved:    tr.BytesMoved,
+	}
+
+	if !tr.RequestedAt.IsZero() {
+		result.RequestedAt =
+			tr.RequestedAt.Format(time.RFC3339Nano)
+	}
+
+	if tr.StartedAt != nil {
+		result.StartedAt =
+			tr.StartedAt.Format(time.RFC3339Nano)
+	}
+
+	if tr.CompletedAt != nil {
+		result.CompletedAt =
+			tr.CompletedAt.Format(time.RFC3339Nano)
+	}
+
+	return result
+}
+
+func (s *Server) RequestTransition(
+	ctx context.Context,
+	req *forgev1.RequestTransitionRequest,
+) (*forgev1.RequestTransitionResponse, error) {
+	if req.JobId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"job_id required",
+		)
+	}
+
+	if req.Target == nil {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"target allocation required",
+		)
+	}
+
+	target := resourceFromPB(req.Target)
+
+	if err := target.Validate(); err != nil {
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			"invalid target allocation: %v",
+			err,
+		)
+	}
+
+	tr, err := s.Store.AdmitTransition(
+		ctx,
+		req.JobId,
+		target,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(
+			err,
+			storage.ErrInsufficientTransitionCapacity,
+		):
+			return nil, status.Error(
+				codes.ResourceExhausted,
+				"insufficient capacity for transition",
+			)
+
+		case errors.Is(
+			err,
+			transitionmodel.ErrSameAllocation,
+		):
+			return nil, status.Error(
+				codes.InvalidArgument,
+				"target equals current allocation",
+			)
+
+		case errors.Is(
+			err,
+			transitionmodel.ErrInvalidTarget,
+		):
+			return nil, status.Error(
+				codes.InvalidArgument,
+				"target is outside job resource requirements",
+			)
+
+		default:
+			return nil, err
+		}
+	}
+
+	return &forgev1.RequestTransitionResponse{
+		Transition: transitionPB(tr),
+	}, nil
+}
+
+func (s *Server) GetTransition(
+	ctx context.Context,
+	req *forgev1.GetTransitionRequest,
+) (*forgev1.Transition, error) {
+	if req.TransitionId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"transition_id required",
+		)
+	}
+
+	tr, err := s.Store.GetTransition(
+		ctx,
+		req.TransitionId,
+	)
+	if err != nil {
+		if errors.Is(
+			err,
+			storage.ErrTransitionNotFound,
+		) {
+			return nil, status.Error(
+				codes.NotFound,
+				"transition not found",
+			)
+		}
+
+		return nil, err
+	}
+
+	return transitionPB(tr), nil
+}
+func (s *Server) ListJobTransitions(
+	ctx context.Context,
+	req *forgev1.ListJobTransitionsRequest,
+) (*forgev1.ListJobTransitionsResponse, error) {
+	if req.JobId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"job_id required",
+		)
+	}
+
+	transitions, err :=
+		s.Store.ListTransitionsForJob(
+			ctx,
+			req.JobId,
+		)
+	if err != nil {
+		return nil, err
+	}
+
+	response :=
+		&forgev1.ListJobTransitionsResponse{
+			Transitions: make(
+				[]*forgev1.Transition,
+				0,
+				len(transitions),
+			),
+		}
+
+	for _, tr := range transitions {
+		response.Transitions = append(
+			response.Transitions,
+			transitionPB(tr),
+		)
+	}
+
+	return response, nil
+}
+
+func (s *Server) LeaseTransition(
+	ctx context.Context,
+	req *forgev1.LeaseTransitionRequest,
+) (*forgev1.LeaseTransitionResponse, error) {
+	if req.WorkerId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker_id required",
+		)
+	}
+
+	tr, err := s.Store.LeaseTransition(
+		ctx,
+		req.WorkerId,
+	)
+	if err != nil {
+		if errors.Is(
+			err,
+			storage.ErrNoLeasableTransition,
+		) {
+			return nil, status.Error(
+				codes.NotFound,
+				"no requested transition for worker",
+			)
+		}
+
+		return nil, status.Error(
+			codes.Internal,
+			"failed to lease transition",
+		)
+	}
+
+	return &forgev1.LeaseTransitionResponse{
+		Transition: transitionPB(tr),
+	}, nil
+}
+
+func (s *Server) AdvanceTransition(
+	ctx context.Context,
+	req *forgev1.AdvanceTransitionRequest,
+) (*forgev1.AdvanceTransitionResponse, error) {
+	if req.WorkerId == "" ||
+		req.TransitionId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker_id and transition_id required",
+		)
+	}
+
+	next, err := transitionStateFromPB(
+		req.NextState,
+	)
+	if err != nil {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			err.Error(),
+		)
+	}
+
+	owned, err := s.Store.TransitionOwnedByWorker(
+		ctx,
+		req.TransitionId,
+		req.WorkerId,
+	)
+	if err != nil {
+		return nil, status.Error(
+			codes.Internal,
+			"failed to verify transition ownership",
+		)
+	}
+
+	if !owned {
+		return nil, status.Error(
+			codes.PermissionDenied,
+			"worker does not own transition",
+		)
+	}
+
+	tr, err := s.Store.AdvanceTransition(
+		ctx,
+		req.TransitionId,
+		next,
+	)
+	if err != nil {
+		return nil, status.Errorf(
+			codes.FailedPrecondition,
+			"advance transition: %v",
+			err,
+		)
+	}
+
+	return &forgev1.AdvanceTransitionResponse{
+		Transition: transitionPB(tr),
+	}, nil
+}
+
+func (s *Server) CompleteTransition(
+	ctx context.Context,
+	req *forgev1.CompleteTransitionRequest,
+) (*forgev1.CompleteTransitionResponse, error) {
+	if req.WorkerId == "" ||
+		req.TransitionId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker_id and transition_id required",
+		)
+	}
+
+	owned, err := s.Store.TransitionOwnedByWorker(
+		ctx,
+		req.TransitionId,
+		req.WorkerId,
+	)
+	if err != nil {
+		return nil, status.Error(
+			codes.Internal,
+			"failed to verify transition ownership",
+		)
+	}
+
+	if !owned {
+		return nil, status.Error(
+			codes.PermissionDenied,
+			"worker does not own transition",
+		)
+	}
+
+	tr, err := s.Store.CompleteTransition(
+		ctx,
+		req.TransitionId,
+	)
+	if err != nil {
+		return nil, status.Errorf(
+			codes.FailedPrecondition,
+			"complete transition: %v",
+			err,
+		)
+	}
+
+	return &forgev1.CompleteTransitionResponse{
+		Transition: transitionPB(tr),
+	}, nil
+}
+
+func (s *Server) FailTransition(
+	ctx context.Context,
+	req *forgev1.FailTransitionRequest,
+) (*forgev1.FailTransitionResponse, error) {
+	if req.WorkerId == "" ||
+		req.TransitionId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker_id and transition_id required",
+		)
+	}
+
+	if req.Reason == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"failure reason required",
+		)
+	}
+
+	owned, err := s.Store.TransitionOwnedByWorker(
+		ctx,
+		req.TransitionId,
+		req.WorkerId,
+	)
+	if err != nil {
+		return nil, status.Error(
+			codes.Internal,
+			"failed to verify transition ownership",
+		)
+	}
+
+	if !owned {
+		return nil, status.Error(
+			codes.PermissionDenied,
+			"worker does not own transition",
+		)
+	}
+
+	tr, err := s.Store.FailTransition(
+		ctx,
+		req.TransitionId,
+		req.Reason,
+	)
+	if err != nil {
+		return nil, status.Errorf(
+			codes.FailedPrecondition,
+			"fail transition: %v",
+			err,
+		)
+	}
+
+	return &forgev1.FailTransitionResponse{
+		Transition: transitionPB(tr),
+	}, nil
+}
+
+func (s *Server) RecordTransitionMetrics(
+	ctx context.Context,
+	req *forgev1.RecordTransitionMetricsRequest,
+) (*forgev1.RecordTransitionMetricsResponse, error) {
+	if req.WorkerId == "" ||
+		req.TransitionId == "" {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"worker_id and transition_id required",
+		)
+	}
+
+	if req.Metrics == nil {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"metrics required",
+		)
+	}
+
+	owned, err := s.Store.TransitionOwnedByWorker(
+		ctx,
+		req.TransitionId,
+		req.WorkerId,
+	)
+	if err != nil {
+		return nil, status.Error(
+			codes.Internal,
+			"failed to verify transition ownership",
+		)
+	}
+
+	if !owned {
+		return nil, status.Error(
+			codes.PermissionDenied,
+			"worker does not own transition",
+		)
+	}
+
+	m := req.Metrics
+
+	if m.PrepareMs < 0 ||
+		m.CheckpointMs < 0 ||
+		m.ReconfigureMs < 0 ||
+		m.RestoreMs < 0 ||
+		m.ResumeMs < 0 ||
+		m.CheckpointBytes < 0 ||
+		m.RestoreBytes < 0 {
+		return nil, status.Error(
+			codes.InvalidArgument,
+			"transition metrics cannot be negative",
+		)
+	}
+
+	tr, err := s.Store.RecordTransitionMetrics(
+		ctx,
+		req.TransitionId,
+		transitionmodel.Metrics{
+			PrepareDuration: time.Duration(m.PrepareMs) * time.Millisecond,
+
+			CheckpointDuration: time.Duration(m.CheckpointMs) * time.Millisecond,
+
+			ReconfigureDuration: time.Duration(m.ReconfigureMs) * time.Millisecond,
+
+			RestoreDuration: time.Duration(m.RestoreMs) * time.Millisecond,
+
+			ResumeDuration: time.Duration(m.ResumeMs) * time.Millisecond,
+
+			CheckpointBytes: m.CheckpointBytes,
+
+			RestoreBytes: m.RestoreBytes,
+		},
+	)
+	if err != nil {
+		return nil, status.Errorf(
+			codes.Internal,
+			"record transition metrics: %v",
+			err,
+		)
+	}
+
+	return &forgev1.RecordTransitionMetricsResponse{
+		Transition: transitionPB(tr),
 	}, nil
 }

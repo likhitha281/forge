@@ -1,16 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	forgev1 "github.com/likhitha281/forge/gen/forge/v1"
+	"github.com/likhitha281/forge/internal/resource"
 	"github.com/likhitha281/forge/internal/retry"
+	workerruntime "github.com/likhitha281/forge/internal/worker"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -19,23 +24,36 @@ import (
 )
 
 func main() {
-	addr := env("FORGE_ADDR", "localhost:50051")
-
 	// Use WORKER_ID when explicitly configured.
 	// Otherwise use the hostname so Docker-scaled workers
 	// automatically receive unique identities.
+	addr := env(
+		"FORGE_ADDR",
+		"localhost:50051",
+	)
+
 	id := os.Getenv("WORKER_ID")
+
 	if id == "" {
 		hostname, err := os.Hostname()
 		if err != nil {
-			log.Fatalf("failed to determine worker hostname: %v", err)
+			log.Fatalf(
+				"failed to determine worker hostname: %v",
+				err,
+			)
 		}
+
 		id = hostname
 	}
 
-	capN, err := strconv.Atoi(env("WORKER_CAPACITY", "4"))
+	capN, err := strconv.Atoi(
+		env("WORKER_CAPACITY", "4"),
+	)
 	if err != nil {
-		log.Fatalf("invalid WORKER_CAPACITY: %v", err)
+		log.Fatalf(
+			"invalid WORKER_CAPACITY: %v",
+			err,
+		)
 	}
 
 	cpuCores, err := strconv.ParseFloat(
@@ -43,7 +61,10 @@ func main() {
 		64,
 	)
 	if err != nil {
-		log.Fatalf("invalid WORKER_CPU_CORES: %v", err)
+		log.Fatalf(
+			"invalid WORKER_CPU_CORES: %v",
+			err,
+		)
 	}
 
 	memoryMB, err := strconv.ParseInt(
@@ -52,7 +73,10 @@ func main() {
 		64,
 	)
 	if err != nil {
-		log.Fatalf("invalid WORKER_MEMORY_MB: %v", err)
+		log.Fatalf(
+			"invalid WORKER_MEMORY_MB: %v",
+			err,
+		)
 	}
 
 	gpus, err := strconv.ParseInt(
@@ -61,7 +85,10 @@ func main() {
 		32,
 	)
 	if err != nil {
-		log.Fatalf("invalid WORKER_GPUS: %v", err)
+		log.Fatalf(
+			"invalid WORKER_GPUS: %v",
+			err,
+		)
 	}
 
 	log.Printf(
@@ -76,7 +103,9 @@ func main() {
 
 	conn, err := grpc.NewClient(
 		addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(
+			insecure.NewCredentials(),
+		),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -84,6 +113,7 @@ func main() {
 	defer conn.Close()
 
 	client := forgev1.NewForgeClient(conn)
+
 	ctx := context.Background()
 
 	// Register this worker with the coordinator.
@@ -103,13 +133,30 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Printf("worker %s registered successfully", id)
+	log.Printf(
+		"worker %s registered successfully",
+		id,
+	)
 
 	var running atomic.Int32
 
+	// Track all processes currently executing on this worker.
+	runtimeManager :=
+		workerruntime.NewRuntimeManager()
+
+	// Run one transition-processing loop for the lifetime of the worker.
+	go workerruntime.RunTransitionLoop(
+		ctx,
+		client,
+		id,
+		runtimeManager,
+	)
+
 	// Send periodic worker heartbeats.
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(
+			5 * time.Second,
+		)
 		defer ticker.Stop()
 
 		for {
@@ -139,7 +186,10 @@ func main() {
 
 	// Semaphore limits the number of jobs this worker
 	// can execute concurrently.
-	sem := make(chan struct{}, capN)
+	sem := make(
+		chan struct{},
+		capN,
+	)
 
 	for {
 		response, err := client.LeaseJob(
@@ -150,7 +200,8 @@ func main() {
 		)
 
 		if err != nil {
-			if status.Code(err) == codes.NotFound {
+			if status.Code(err) ==
+				codes.NotFound {
 				time.Sleep(time.Second)
 				continue
 			}
@@ -182,20 +233,32 @@ func main() {
 			)
 
 			// Give each executing job its own context.
-			jobCtx, cancelJob := context.WithCancel(ctx)
+			jobCtx, cancelJob :=
+				context.WithCancel(ctx)
 			defer cancelJob()
 
-			// Signal used to stop the lease-renewal goroutine
-			// immediately after execution finishes.
+			// Signal used to stop lease renewal as soon as
+			// execution terminates.
 			renewDone := make(chan struct{})
 
-			// Renew the lease every 10 seconds while the job runs.
-			//
-			// The coordinator currently gives jobs a 30-second
-			// lease, so renewing every 10 seconds gives us enough
-			// safety margin for temporary delays.
+			// Protect renewDone from accidental double close as
+			// execution moves through the different error paths.
+			var renewalStopped atomic.Bool
+
+			stopRenewal := func() {
+				if renewalStopped.CompareAndSwap(
+					false,
+					true,
+				) {
+					close(renewDone)
+				}
+			}
+
+			// Renew the job lease every ten seconds.
 			go func() {
-				ticker := time.NewTicker(10 * time.Second)
+				ticker := time.NewTicker(
+					10 * time.Second,
+				)
 				defer ticker.Stop()
 
 				for {
@@ -207,13 +270,14 @@ func main() {
 						return
 
 					case <-ticker.C:
-						renewResponse, err := client.RenewLease(
-							jobCtx,
-							&forgev1.RenewLeaseRequest{
-								WorkerId: id,
-								JobId:    job.Id,
-							},
-						)
+						renewResponse, err :=
+							client.RenewLease(
+								jobCtx,
+								&forgev1.RenewLeaseRequest{
+									WorkerId: id,
+									JobId:    job.Id,
+								},
+							)
 
 						if err != nil {
 							log.Printf(
@@ -235,7 +299,39 @@ func main() {
 				}
 			}()
 
-			// Execute the job inside the worker's Linux container.
+			if job.Allocation == nil {
+				stopRenewal()
+
+				log.Printf(
+					"worker=%s job=%s has no allocation",
+					id,
+					job.Id,
+				)
+
+				_, completeErr :=
+					client.CompleteJob(
+						ctx,
+						&forgev1.CompleteJobRequest{
+							WorkerId: id,
+							JobId:    job.Id,
+							Success:  false,
+							Error:    "leased job has no allocation",
+						},
+					)
+
+				if completeErr != nil {
+					log.Printf(
+						"worker=%s complete invalid job=%s error=%v",
+						id,
+						job.Id,
+						completeErr,
+					)
+				}
+
+				return
+			}
+
+			// Construct the process but do not start it yet.
 			cmd := exec.CommandContext(
 				jobCtx,
 				"/bin/sh",
@@ -243,17 +339,237 @@ func main() {
 				job.Payload,
 			)
 
-			output, execErr := cmd.CombinedOutput()
+			controlDir :=
+				"/tmp/forge/" + job.Id
 
-			// Execution has finished, so lease renewal is no longer
-			// necessary.
-			close(renewDone)
+			if err := os.MkdirAll(
+				controlDir,
+				0o755,
+			); err != nil {
+				stopRenewal()
+
+				log.Printf(
+					"worker=%s create control directory job=%s error=%v",
+					id,
+					job.Id,
+					err,
+				)
+
+				_, completeErr :=
+					client.CompleteJob(
+						ctx,
+						&forgev1.CompleteJobRequest{
+							WorkerId: id,
+							JobId:    job.Id,
+							Success:  false,
+							Error:    err.Error(),
+						},
+					)
+
+				if completeErr != nil {
+					log.Printf(
+						"worker=%s complete control-directory failure job=%s error=%v",
+						id,
+						job.Id,
+						completeErr,
+					)
+				}
+
+				return
+			}
+
+			checkpointPath :=
+				controlDir + "/checkpoint.bin"
+
+			checkpointDone :=
+				controlDir + "/checkpoint.done"
+
+			restoreDone :=
+				controlDir + "/restore.done"
+
+			allocationPath :=
+				filepath.Join(
+					controlDir,
+					"allocation",
+				)
+
+			// Initialize the workload's logical GPU allocation
+			// before starting the process.
+			if err := os.WriteFile(
+				allocationPath,
+				[]byte(
+					strconv.Itoa(
+						int(job.Allocation.Gpus),
+					)+"\n",
+				),
+				0o644,
+			); err != nil {
+				stopRenewal()
+
+				log.Printf(
+					"worker=%s initialize allocation file job=%s error=%v",
+					id,
+					job.Id,
+					err,
+				)
+
+				return
+			}
+
+			cmd.Env = append(
+				os.Environ(),
+
+				"FORGE_JOB_ID="+job.Id,
+				"FORGE_CONTROL_DIR="+controlDir,
+
+				"FORGE_CHECKPOINT_PATH="+checkpointPath,
+				"FORGE_CHECKPOINT_DONE="+checkpointDone,
+				"FORGE_RESTORE_DONE="+restoreDone,
+				"FORGE_ALLOCATION_FILE="+allocationPath,
+			)
+
+			var output bytes.Buffer
+
+			cmd.Stdout = &output
+			cmd.Stderr = &output
+
+			runtime := workerruntime.NewRuntime(
+				job.Id,
+				cmd,
+				resource.Vector{
+					CPUCores: job.Allocation.CpuCores,
+					MemoryMB: job.Allocation.MemoryMb,
+					GPUs:     job.Allocation.Gpus,
+				},
+				time.Now().UTC(),
+			)
+
+			runtime.SetControlPaths(
+				controlDir,
+				checkpointPath,
+				checkpointDone,
+				restoreDone,
+				allocationPath,
+			)
+
+			runtime.SetCheckpointable(
+				strings.Contains(
+					job.Payload,
+					"checkpointable",
+				) ||
+					strings.Contains(
+						job.Payload,
+						"elastic",
+					),
+			)
+
+			defer runtimeManager.Remove(job.Id)
+
+			// Start the underlying process before publishing the runtime.
+			// This prevents the transition loop from observing a runtime
+			// whose process does not exist yet.
+
+			// Start the underlying process before publishing the runtime.
+			// This prevents the transition loop from observing a runtime
+			// whose process does not exist yet.
+
+			if err := cmd.Start(); err != nil {
+				stopRenewal()
+
+				log.Printf(
+					"worker=%s start job=%s error=%v",
+					id,
+					job.Id,
+					err,
+				)
+
+				_, completeErr :=
+					client.CompleteJob(
+						ctx,
+						&forgev1.CompleteJobRequest{
+							WorkerId: id,
+							JobId:    job.Id,
+							Success:  false,
+							Error:    err.Error(),
+						},
+					)
+
+				if completeErr != nil {
+					log.Printf(
+						"worker=%s complete failed-start job=%s error=%v",
+						id,
+						job.Id,
+						completeErr,
+					)
+				}
+
+				return
+			}
+
+			if err := runtimeManager.Add(
+				runtime,
+			); err != nil {
+				stopRenewal()
+
+				// The process already exists, so clean it up if registration fails.
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+
+				log.Printf(
+					"worker=%s register runtime job=%s error=%v",
+					id,
+					job.Id,
+					err,
+				)
+
+				_, completeErr :=
+					client.CompleteJob(
+						ctx,
+						&forgev1.CompleteJobRequest{
+							WorkerId: id,
+							JobId:    job.Id,
+							Success:  false,
+							Error:    err.Error(),
+						},
+					)
+
+				if completeErr != nil {
+					log.Printf(
+						"worker=%s complete runtime-registration failure job=%s error=%v",
+						id,
+						job.Id,
+						completeErr,
+					)
+				}
+
+				return
+			}
+
+			defer runtimeManager.Remove(job.Id)
+
+			log.Printf(
+				"worker=%s registered runtime job=%s pid=%d checkpointable=%t",
+				id,
+				job.Id,
+				runtime.PID(),
+				runtime.Checkpointable(),
+			)
+
+			execErr := cmd.Wait()
+
+			// Execution has finished, so lease renewal is no
+			// longer necessary.
+			stopRenewal()
 
 			success := execErr == nil
 			errorMessage := ""
 
 			if execErr != nil {
-				errorMessage = execErr.Error() + ": " + string(output)
+				errorMessage =
+					execErr.Error() +
+						": " +
+						output.String()
 
 				log.Printf(
 					"worker=%s job=%s failed: %s",
@@ -269,15 +585,16 @@ func main() {
 				)
 			}
 
-			_, completeErr := client.CompleteJob(
-				ctx,
-				&forgev1.CompleteJobRequest{
-					WorkerId: id,
-					JobId:    job.Id,
-					Success:  success,
-					Error:    errorMessage,
-				},
-			)
+			_, completeErr :=
+				client.CompleteJob(
+					ctx,
+					&forgev1.CompleteJobRequest{
+						WorkerId: id,
+						JobId:    job.Id,
+						Success:  success,
+						Error:    errorMessage,
+					},
+				)
 
 			if completeErr != nil {
 				log.Printf(
@@ -285,8 +602,11 @@ func main() {
 					id,
 					job.Id,
 					completeErr,
-					retry.Backoff(int(job.Attempts)),
+					retry.Backoff(
+						int(job.Attempts),
+					),
 				)
+
 				return
 			}
 
@@ -299,7 +619,10 @@ func main() {
 	}
 }
 
-func env(key, defaultValue string) string {
+func env(
+	key string,
+	defaultValue string,
+) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}

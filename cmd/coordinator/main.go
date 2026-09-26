@@ -39,6 +39,23 @@ func main() {
 	// Periodically recover jobs whose worker lease expired.
 	go requeueExpiredJobs(ctx, store)
 
+	reconciled, err :=
+		store.ReconcileStaleTransitions(ctx)
+
+	if err != nil {
+		log.Fatalf(
+			"failed to reconcile stale transitions: %v",
+			err,
+		)
+	}
+
+	if reconciled > 0 {
+		log.Printf(
+			"reconciled %d stale transition(s)",
+			reconciled,
+		)
+	}
+
 	// Expose Prometheus metrics.
 	go startMetricsServer()
 

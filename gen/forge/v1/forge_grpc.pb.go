@@ -19,16 +19,24 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Forge_SubmitJob_FullMethodName      = "/forge.v1.Forge/SubmitJob"
-	Forge_GetJob_FullMethodName         = "/forge.v1.Forge/GetJob"
-	Forge_ListJobs_FullMethodName       = "/forge.v1.Forge/ListJobs"
-	Forge_CancelJob_FullMethodName      = "/forge.v1.Forge/CancelJob"
-	Forge_RegisterWorker_FullMethodName = "/forge.v1.Forge/RegisterWorker"
-	Forge_Heartbeat_FullMethodName      = "/forge.v1.Forge/Heartbeat"
-	Forge_ListWorkers_FullMethodName    = "/forge.v1.Forge/ListWorkers"
-	Forge_LeaseJob_FullMethodName       = "/forge.v1.Forge/LeaseJob"
-	Forge_CompleteJob_FullMethodName    = "/forge.v1.Forge/CompleteJob"
-	Forge_RenewLease_FullMethodName     = "/forge.v1.Forge/RenewLease"
+	Forge_SubmitJob_FullMethodName               = "/forge.v1.Forge/SubmitJob"
+	Forge_GetJob_FullMethodName                  = "/forge.v1.Forge/GetJob"
+	Forge_ListJobs_FullMethodName                = "/forge.v1.Forge/ListJobs"
+	Forge_CancelJob_FullMethodName               = "/forge.v1.Forge/CancelJob"
+	Forge_RegisterWorker_FullMethodName          = "/forge.v1.Forge/RegisterWorker"
+	Forge_Heartbeat_FullMethodName               = "/forge.v1.Forge/Heartbeat"
+	Forge_ListWorkers_FullMethodName             = "/forge.v1.Forge/ListWorkers"
+	Forge_LeaseJob_FullMethodName                = "/forge.v1.Forge/LeaseJob"
+	Forge_CompleteJob_FullMethodName             = "/forge.v1.Forge/CompleteJob"
+	Forge_RenewLease_FullMethodName              = "/forge.v1.Forge/RenewLease"
+	Forge_RequestTransition_FullMethodName       = "/forge.v1.Forge/RequestTransition"
+	Forge_GetTransition_FullMethodName           = "/forge.v1.Forge/GetTransition"
+	Forge_ListJobTransitions_FullMethodName      = "/forge.v1.Forge/ListJobTransitions"
+	Forge_LeaseTransition_FullMethodName         = "/forge.v1.Forge/LeaseTransition"
+	Forge_AdvanceTransition_FullMethodName       = "/forge.v1.Forge/AdvanceTransition"
+	Forge_CompleteTransition_FullMethodName      = "/forge.v1.Forge/CompleteTransition"
+	Forge_FailTransition_FullMethodName          = "/forge.v1.Forge/FailTransition"
+	Forge_RecordTransitionMetrics_FullMethodName = "/forge.v1.Forge/RecordTransitionMetrics"
 )
 
 // ForgeClient is the client API for Forge service.
@@ -45,6 +53,14 @@ type ForgeClient interface {
 	LeaseJob(ctx context.Context, in *LeaseJobRequest, opts ...grpc.CallOption) (*LeaseJobResponse, error)
 	CompleteJob(ctx context.Context, in *CompleteJobRequest, opts ...grpc.CallOption) (*CompleteJobResponse, error)
 	RenewLease(ctx context.Context, in *RenewLeaseRequest, opts ...grpc.CallOption) (*RenewLeaseResponse, error)
+	RequestTransition(ctx context.Context, in *RequestTransitionRequest, opts ...grpc.CallOption) (*RequestTransitionResponse, error)
+	GetTransition(ctx context.Context, in *GetTransitionRequest, opts ...grpc.CallOption) (*Transition, error)
+	ListJobTransitions(ctx context.Context, in *ListJobTransitionsRequest, opts ...grpc.CallOption) (*ListJobTransitionsResponse, error)
+	LeaseTransition(ctx context.Context, in *LeaseTransitionRequest, opts ...grpc.CallOption) (*LeaseTransitionResponse, error)
+	AdvanceTransition(ctx context.Context, in *AdvanceTransitionRequest, opts ...grpc.CallOption) (*AdvanceTransitionResponse, error)
+	CompleteTransition(ctx context.Context, in *CompleteTransitionRequest, opts ...grpc.CallOption) (*CompleteTransitionResponse, error)
+	FailTransition(ctx context.Context, in *FailTransitionRequest, opts ...grpc.CallOption) (*FailTransitionResponse, error)
+	RecordTransitionMetrics(ctx context.Context, in *RecordTransitionMetricsRequest, opts ...grpc.CallOption) (*RecordTransitionMetricsResponse, error)
 }
 
 type forgeClient struct {
@@ -155,6 +171,86 @@ func (c *forgeClient) RenewLease(ctx context.Context, in *RenewLeaseRequest, opt
 	return out, nil
 }
 
+func (c *forgeClient) RequestTransition(ctx context.Context, in *RequestTransitionRequest, opts ...grpc.CallOption) (*RequestTransitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestTransitionResponse)
+	err := c.cc.Invoke(ctx, Forge_RequestTransition_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeClient) GetTransition(ctx context.Context, in *GetTransitionRequest, opts ...grpc.CallOption) (*Transition, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Transition)
+	err := c.cc.Invoke(ctx, Forge_GetTransition_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeClient) ListJobTransitions(ctx context.Context, in *ListJobTransitionsRequest, opts ...grpc.CallOption) (*ListJobTransitionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListJobTransitionsResponse)
+	err := c.cc.Invoke(ctx, Forge_ListJobTransitions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeClient) LeaseTransition(ctx context.Context, in *LeaseTransitionRequest, opts ...grpc.CallOption) (*LeaseTransitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LeaseTransitionResponse)
+	err := c.cc.Invoke(ctx, Forge_LeaseTransition_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeClient) AdvanceTransition(ctx context.Context, in *AdvanceTransitionRequest, opts ...grpc.CallOption) (*AdvanceTransitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdvanceTransitionResponse)
+	err := c.cc.Invoke(ctx, Forge_AdvanceTransition_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeClient) CompleteTransition(ctx context.Context, in *CompleteTransitionRequest, opts ...grpc.CallOption) (*CompleteTransitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteTransitionResponse)
+	err := c.cc.Invoke(ctx, Forge_CompleteTransition_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeClient) FailTransition(ctx context.Context, in *FailTransitionRequest, opts ...grpc.CallOption) (*FailTransitionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FailTransitionResponse)
+	err := c.cc.Invoke(ctx, Forge_FailTransition_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *forgeClient) RecordTransitionMetrics(ctx context.Context, in *RecordTransitionMetricsRequest, opts ...grpc.CallOption) (*RecordTransitionMetricsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordTransitionMetricsResponse)
+	err := c.cc.Invoke(ctx, Forge_RecordTransitionMetrics_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ForgeServer is the server API for Forge service.
 // All implementations must embed UnimplementedForgeServer
 // for forward compatibility.
@@ -169,6 +265,14 @@ type ForgeServer interface {
 	LeaseJob(context.Context, *LeaseJobRequest) (*LeaseJobResponse, error)
 	CompleteJob(context.Context, *CompleteJobRequest) (*CompleteJobResponse, error)
 	RenewLease(context.Context, *RenewLeaseRequest) (*RenewLeaseResponse, error)
+	RequestTransition(context.Context, *RequestTransitionRequest) (*RequestTransitionResponse, error)
+	GetTransition(context.Context, *GetTransitionRequest) (*Transition, error)
+	ListJobTransitions(context.Context, *ListJobTransitionsRequest) (*ListJobTransitionsResponse, error)
+	LeaseTransition(context.Context, *LeaseTransitionRequest) (*LeaseTransitionResponse, error)
+	AdvanceTransition(context.Context, *AdvanceTransitionRequest) (*AdvanceTransitionResponse, error)
+	CompleteTransition(context.Context, *CompleteTransitionRequest) (*CompleteTransitionResponse, error)
+	FailTransition(context.Context, *FailTransitionRequest) (*FailTransitionResponse, error)
+	RecordTransitionMetrics(context.Context, *RecordTransitionMetricsRequest) (*RecordTransitionMetricsResponse, error)
 	mustEmbedUnimplementedForgeServer()
 }
 
@@ -208,6 +312,30 @@ func (UnimplementedForgeServer) CompleteJob(context.Context, *CompleteJobRequest
 }
 func (UnimplementedForgeServer) RenewLease(context.Context, *RenewLeaseRequest) (*RenewLeaseResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RenewLease not implemented")
+}
+func (UnimplementedForgeServer) RequestTransition(context.Context, *RequestTransitionRequest) (*RequestTransitionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RequestTransition not implemented")
+}
+func (UnimplementedForgeServer) GetTransition(context.Context, *GetTransitionRequest) (*Transition, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetTransition not implemented")
+}
+func (UnimplementedForgeServer) ListJobTransitions(context.Context, *ListJobTransitionsRequest) (*ListJobTransitionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListJobTransitions not implemented")
+}
+func (UnimplementedForgeServer) LeaseTransition(context.Context, *LeaseTransitionRequest) (*LeaseTransitionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LeaseTransition not implemented")
+}
+func (UnimplementedForgeServer) AdvanceTransition(context.Context, *AdvanceTransitionRequest) (*AdvanceTransitionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AdvanceTransition not implemented")
+}
+func (UnimplementedForgeServer) CompleteTransition(context.Context, *CompleteTransitionRequest) (*CompleteTransitionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteTransition not implemented")
+}
+func (UnimplementedForgeServer) FailTransition(context.Context, *FailTransitionRequest) (*FailTransitionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FailTransition not implemented")
+}
+func (UnimplementedForgeServer) RecordTransitionMetrics(context.Context, *RecordTransitionMetricsRequest) (*RecordTransitionMetricsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecordTransitionMetrics not implemented")
 }
 func (UnimplementedForgeServer) mustEmbedUnimplementedForgeServer() {}
 func (UnimplementedForgeServer) testEmbeddedByValue()               {}
@@ -410,6 +538,150 @@ func _Forge_RenewLease_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Forge_RequestTransition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestTransitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).RequestTransition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_RequestTransition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).RequestTransition(ctx, req.(*RequestTransitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Forge_GetTransition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTransitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).GetTransition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_GetTransition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).GetTransition(ctx, req.(*GetTransitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Forge_ListJobTransitions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListJobTransitionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).ListJobTransitions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_ListJobTransitions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).ListJobTransitions(ctx, req.(*ListJobTransitionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Forge_LeaseTransition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LeaseTransitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).LeaseTransition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_LeaseTransition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).LeaseTransition(ctx, req.(*LeaseTransitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Forge_AdvanceTransition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdvanceTransitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).AdvanceTransition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_AdvanceTransition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).AdvanceTransition(ctx, req.(*AdvanceTransitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Forge_CompleteTransition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteTransitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).CompleteTransition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_CompleteTransition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).CompleteTransition(ctx, req.(*CompleteTransitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Forge_FailTransition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FailTransitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).FailTransition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_FailTransition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).FailTransition(ctx, req.(*FailTransitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Forge_RecordTransitionMetrics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordTransitionMetricsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).RecordTransitionMetrics(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_RecordTransitionMetrics_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).RecordTransitionMetrics(ctx, req.(*RecordTransitionMetricsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Forge_ServiceDesc is the grpc.ServiceDesc for Forge service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -456,6 +728,38 @@ var Forge_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RenewLease",
 			Handler:    _Forge_RenewLease_Handler,
+		},
+		{
+			MethodName: "RequestTransition",
+			Handler:    _Forge_RequestTransition_Handler,
+		},
+		{
+			MethodName: "GetTransition",
+			Handler:    _Forge_GetTransition_Handler,
+		},
+		{
+			MethodName: "ListJobTransitions",
+			Handler:    _Forge_ListJobTransitions_Handler,
+		},
+		{
+			MethodName: "LeaseTransition",
+			Handler:    _Forge_LeaseTransition_Handler,
+		},
+		{
+			MethodName: "AdvanceTransition",
+			Handler:    _Forge_AdvanceTransition_Handler,
+		},
+		{
+			MethodName: "CompleteTransition",
+			Handler:    _Forge_CompleteTransition_Handler,
+		},
+		{
+			MethodName: "FailTransition",
+			Handler:    _Forge_FailTransition_Handler,
+		},
+		{
+			MethodName: "RecordTransitionMetrics",
+			Handler:    _Forge_RecordTransitionMetrics_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

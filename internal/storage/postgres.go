@@ -507,14 +507,43 @@ func (s *Store) Lease(
 		return Job{}, err
 	}
 
+	// Active grow transitions reserve spare worker capacity.
+	//
+	// A reservation prevents Lease() from assigning resources that have
+	// already been promised to a running job's pending reconfiguration.
+	var reserved resource.Vector
+
+	err = tx.QueryRow(
+		ctx,
+		`
+		SELECT
+			COALESCE(SUM(reserved_cpu_cores), 0),
+			COALESCE(SUM(reserved_memory_mb), 0),
+			COALESCE(SUM(reserved_gpu_count), 0)
+		FROM transitions
+		WHERE worker_id = $1
+	  		AND state NOT IN ('COMPLETED', 'FAILED')
+	`,
+		worker,
+	).Scan(
+		&reserved.CPUCores,
+		&reserved.MemoryMB,
+		&reserved.GPUs,
+	)
+	if err != nil {
+		return Job{}, err
+	}
+
 	if runningJobs >= maxConcurrent {
 		return Job{}, ErrNoLeasableJob
 	}
 
-	available, err := capacity.Subtract(allocated)
+	used := allocated.Add(reserved)
+
+	available, err := capacity.Subtract(used)
 	if err != nil {
 		return Job{}, errors.New(
-			"worker resource invariant violated: allocated resources exceed capacity",
+			"worker resource invariant violated: allocated resources plus transition reservations exceed capacity",
 		)
 	}
 
@@ -632,13 +661,45 @@ func (s *Store) Complete(
 		jobStatus = "FAILED"
 	}
 
-	_, err := s.DB.Exec(
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var currentStatus string
+
+	err = tx.QueryRow(
+		ctx,
+		`
+		SELECT status
+		FROM jobs
+		WHERE id = $1
+		FOR UPDATE
+		`,
+		id,
+	).Scan(&currentStatus)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("job not found")
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if currentStatus != "RUNNING" {
+		return errors.New("job is not running")
+	}
+
+	_, err = tx.Exec(
 		ctx,
 		`
 		UPDATE jobs
 		SET
 			status = $2,
 			error = NULLIF($3, ''),
+			worker_id = NULL,
 			lease_until = NULL,
 			allocated_cpu_cores = NULL,
 			allocated_memory_mb = NULL,
@@ -650,14 +711,103 @@ func (s *Store) Complete(
 		jobStatus,
 		message,
 	)
+	if err != nil {
+		return err
+	}
 
-	return err
+	reason := "job completed during transition"
+
+	if !success {
+		reason = "job failed during transition"
+
+		if message != "" {
+			reason += ": " + message
+		}
+	}
+
+	if err := failActiveTransitionsForJobTx(
+		ctx,
+		tx,
+		id,
+		reason,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (s *Store) Requeue(
 	ctx context.Context,
 ) error {
-	_, err := s.DB.Exec(
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock every RUNNING job whose lease has expired.
+	//
+	// We need the IDs because any active transition belongs to this
+	// particular execution attempt and must be terminated before the job
+	// is requeued or permanently failed.
+	rows, err := tx.Query(
+		ctx,
+		`
+		SELECT id::text
+		FROM jobs
+		WHERE status = 'RUNNING'
+		  AND lease_until < now()
+		FOR UPDATE
+		`,
+	)
+	if err != nil {
+		return err
+	}
+
+	var expiredJobIDs []string
+
+	for rows.Next() {
+		var jobID string
+
+		if err := rows.Scan(&jobID); err != nil {
+			rows.Close()
+			return err
+		}
+
+		expiredJobIDs = append(
+			expiredJobIDs,
+			jobID,
+		)
+	}
+
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+
+	rows.Close()
+
+	// Terminate transitions before releasing the execution's resources.
+	//
+	// Even if the job will be QUEUED again, the transition belongs to the
+	// old execution/allocation and cannot survive across lease recovery.
+	for _, jobID := range expiredJobIDs {
+		if err := failActiveTransitionsForJobTx(
+			ctx,
+			tx,
+			jobID,
+			"job lease expired during transition",
+		); err != nil {
+			return err
+		}
+	}
+
+	// Preserve the existing retry semantics:
+	//
+	// attempts < max_attempts  -> QUEUED
+	// attempts >= max_attempts -> FAILED
+	_, err = tx.Exec(
 		ctx,
 		`
 		UPDATE jobs
@@ -680,8 +830,11 @@ func (s *Store) Requeue(
 		  AND lease_until < now()
 		`,
 	)
+	if err != nil {
+		return err
+	}
 
-	return err
+	return tx.Commit(ctx)
 }
 
 func (s *Store) RenewLease(

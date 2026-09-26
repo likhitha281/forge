@@ -18,6 +18,30 @@ service Forge {
   rpc LeaseJob(LeaseJobRequest) returns (LeaseJobResponse);
   rpc CompleteJob(CompleteJobRequest) returns (CompleteJobResponse);
   rpc RenewLease(RenewLeaseRequest) returns (RenewLeaseResponse);
+
+  rpc RequestTransition(RequestTransitionRequest)
+    returns (RequestTransitionResponse);
+
+  rpc GetTransition(GetTransitionRequest)
+    returns (Transition);
+
+  rpc ListJobTransitions(ListJobTransitionsRequest)
+    returns (ListJobTransitionsResponse);
+
+  rpc LeaseTransition(LeaseTransitionRequest)
+    returns (LeaseTransitionResponse);
+
+  rpc AdvanceTransition(AdvanceTransitionRequest)
+    returns (AdvanceTransitionResponse);
+
+  rpc CompleteTransition(CompleteTransitionRequest)
+    returns (CompleteTransitionResponse);
+
+  rpc FailTransition(FailTransitionRequest)
+    returns (FailTransitionResponse);
+
+  rpc RecordTransitionMetrics(RecordTransitionMetricsRequest)
+    returns (RecordTransitionMetricsResponse);
 }
 
 enum JobStatus {
@@ -174,4 +198,112 @@ message JobResources {
   double cpu_cores = 1;
   int64 memory_mb = 2;
   GPUEnvelope gpu = 3;
+}
+
+enum TransitionState {
+  TRANSITION_STATE_UNSPECIFIED = 0;
+  TRANSITION_REQUESTED = 1;
+  TRANSITION_PREPARING = 2;
+  TRANSITION_CHECKPOINTING = 3;
+  TRANSITION_RECONFIGURING = 4;
+  TRANSITION_RESTORING = 5;
+  TRANSITION_RESUMING = 6;
+  TRANSITION_COMPLETED = 7;
+  TRANSITION_FAILED = 8;
+}
+
+message Transition {
+  string id = 1;
+  string job_id = 2;
+
+  TransitionState state = 3;
+
+  ResourceVector source = 4;
+  ResourceVector target = 5;
+
+  string requested_at = 6;
+  string started_at = 7;
+  string completed_at = 8;
+
+  string failure_reason = 9;
+  int64 bytes_moved = 10;
+}
+
+message RequestTransitionRequest {
+  string job_id = 1;
+  ResourceVector target = 2;
+}
+
+message RequestTransitionResponse {
+  Transition transition = 1;
+}
+
+message GetTransitionRequest {
+  string transition_id = 1;
+}
+
+message ListJobTransitionsRequest {
+  string job_id = 1;
+}
+
+message ListJobTransitionsResponse {
+  repeated Transition transitions = 1;
+}
+
+message LeaseTransitionRequest {
+  string worker_id = 1;
+}
+
+message LeaseTransitionResponse {
+  Transition transition = 1;
+}
+
+message AdvanceTransitionRequest {
+  string worker_id = 1;
+  string transition_id = 2;
+  TransitionState next_state = 3;
+}
+
+message AdvanceTransitionResponse {
+  Transition transition = 1;
+}
+
+message CompleteTransitionRequest {
+  string worker_id = 1;
+  string transition_id = 2;
+}
+
+message CompleteTransitionResponse {
+  Transition transition = 1;
+}
+
+message FailTransitionRequest {
+  string worker_id = 1;
+  string transition_id = 2;
+  string reason = 3;
+}
+
+message FailTransitionResponse {
+  Transition transition = 1;
+}
+
+message TransitionMetrics {
+  int64 prepare_ms = 1;
+  int64 checkpoint_ms = 2;
+  int64 reconfigure_ms = 3;
+  int64 restore_ms = 4;
+  int64 resume_ms = 5;
+
+  int64 checkpoint_bytes = 6;
+  int64 restore_bytes = 7;
+}
+
+message RecordTransitionMetricsRequest {
+  string worker_id = 1;
+  string transition_id = 2;
+  TransitionMetrics metrics = 3;
+}
+
+message RecordTransitionMetricsResponse {
+  Transition transition = 1;
 }
