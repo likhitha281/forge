@@ -1,0 +1,4 @@
+"Work","StaticMedian","NaiveMedian","CostAwareMedian","NaiveVsStaticPct","CostAwareVsStaticPct","CostAwareVsNaivePct"
+"100000","8.548","8.387","13.656","1.88","-59.76","-62.82"
+"500000","41.836","36.651","50.062","12.39","-19.66","-36.59"
+"2000000","179.289","148.501","169.344","17.17","5.55","-14.04"
