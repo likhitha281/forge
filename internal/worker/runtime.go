@@ -44,6 +44,36 @@ type Runtime struct {
 	checkpointable bool
 
 	allocationPath string
+
+	progressPath string
+
+	command string
+	maxGPUs int32
+}
+
+func (r *Runtime) SetWorkloadMetadata(
+	command string,
+	maxGPUs int32,
+) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.command = command
+	r.maxGPUs = maxGPUs
+}
+
+func (r *Runtime) Command() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.command
+}
+
+func (r *Runtime) MaxGPUs() int32 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.maxGPUs
 }
 
 func NewRuntime(
@@ -117,9 +147,13 @@ func (r *Runtime) SetControlPaths(
 	checkpointDone string,
 	restoreDone string,
 	allocationPath string,
+	progressPath string,
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	r.progressPath =
+		progressPath
 
 	r.controlDir =
 		controlDir
@@ -135,6 +169,13 @@ func (r *Runtime) SetControlPaths(
 
 	r.allocationPath =
 		allocationPath
+}
+
+func (r *Runtime) ProgressPath() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.progressPath
 }
 
 func (r *Runtime) ControlDir() string {

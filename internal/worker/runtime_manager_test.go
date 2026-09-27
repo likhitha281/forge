@@ -132,3 +132,48 @@ func TestRuntimeAllocationUpdate(
 		)
 	}
 }
+
+func TestRuntimeManagerSnapshot(
+	t *testing.T,
+) {
+	manager :=
+		NewRuntimeManager()
+
+	runtimeA :=
+		NewRuntime(
+			"job-a",
+			nil,
+			resource.Vector{
+				GPUs: 2,
+			},
+			time.Now(),
+		)
+
+	runtimeB :=
+		NewRuntime(
+			"job-b",
+			nil,
+			resource.Vector{
+				GPUs: 4,
+			},
+			time.Now(),
+		)
+
+	if err := manager.Add(runtimeA); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.Add(runtimeB); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot :=
+		manager.Snapshot()
+
+	if len(snapshot) != 2 {
+		t.Fatalf(
+			"len(snapshot) = %d, want 2",
+			len(snapshot),
+		)
+	}
+}

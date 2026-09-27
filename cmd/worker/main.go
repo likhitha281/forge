@@ -144,12 +144,46 @@ func main() {
 	runtimeManager :=
 		workerruntime.NewRuntimeManager()
 
+	performanceProfiles :=
+		workerruntime.NewPerformanceProfiles(
+			0.3,
+		)
+
 	// Run one transition-processing loop for the lifetime of the worker.
 	go workerruntime.RunTransitionLoop(
 		ctx,
 		client,
 		id,
 		runtimeManager,
+	)
+
+	go workerruntime.RunPerformanceSampler(
+		ctx,
+		runtimeManager,
+		performanceProfiles,
+		time.Second,
+	)
+
+	go workerruntime.RunAutoscalerLoop(
+		ctx,
+		client,
+		runtimeManager,
+		performanceProfiles,
+		workerruntime.AutoscalerConfig{
+			Interval: 5 * time.Second,
+
+			Cooldown: 30 * time.Second,
+
+			MinimumNetBenefit: 5 * time.Second,
+
+			SafetyMultiplier: 2.0,
+
+			MinCostSamples: 3,
+
+			CostDataPath: os.Getenv(
+				"FORGE_TRANSITION_COST_DATA",
+			),
+		},
 	)
 
 	// Send periodic worker heartbeats.
@@ -393,6 +427,12 @@ func main() {
 					"allocation",
 				)
 
+			progressPath :=
+				filepath.Join(
+					controlDir,
+					"progress.json",
+				)
+
 			// Initialize the workload's logical GPU allocation
 			// before starting the process.
 			if err := os.WriteFile(
@@ -426,6 +466,7 @@ func main() {
 				"FORGE_CHECKPOINT_DONE="+checkpointDone,
 				"FORGE_RESTORE_DONE="+restoreDone,
 				"FORGE_ALLOCATION_FILE="+allocationPath,
+				"FORGE_PROGRESS_FILE="+progressPath,
 			)
 
 			var output bytes.Buffer
@@ -444,12 +485,32 @@ func main() {
 				time.Now().UTC(),
 			)
 
+			var maxGPUs int32
+
+			if job.Requirements != nil &&
+				job.Requirements.Gpu != nil {
+
+				maxGPUs =
+					job.Requirements.Gpu.Max
+			}
+
+			runtime.SetWorkloadMetadata(
+				job.Payload,
+				maxGPUs,
+			)
+
+			runtime.SetWorkloadMetadata(
+				job.Payload,
+				job.Requirements.Gpu.Max,
+			)
+
 			runtime.SetControlPaths(
 				controlDir,
 				checkpointPath,
 				checkpointDone,
 				restoreDone,
 				allocationPath,
+				progressPath,
 			)
 
 			runtime.SetCheckpointable(

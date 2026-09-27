@@ -64,6 +64,10 @@ func TestProcessExecutorReconfigureUpdatesAllocationFile(
 			"restore.done",
 		),
 		allocationPath,
+		filepath.Join(
+			dir,
+			"progress.json",
+		),
 	)
 
 	executor :=

@@ -5,6 +5,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -20,7 +21,25 @@ import (
 	"time"
 )
 
+type progressSnapshot struct {
+	Completed  uint64  `json:"completed"`
+	Total      uint64  `json:"total"`
+	Allocation int     `json:"allocation"`
+	Rate       float64 `json:"rate"`
+	Timestamp  string  `json:"timestamp"`
+}
+
 func main() {
+
+	progressPath := flag.String(
+		"progress-file",
+		envOrDefault(
+			"FORGE_PROGRESS_FILE",
+			"/tmp/forge-progress.json",
+		),
+		"structured progress telemetry file",
+	)
+
 	stateMB := flag.Int(
 		"state-mb",
 		64,
@@ -381,6 +400,24 @@ func main() {
 				float64(delta) /
 					interval.Seconds()
 
+			snapshot := progressSnapshot{
+				Completed:  newCompleted,
+				Total:      *totalWork,
+				Allocation: parallelism,
+				Rate:       rate,
+				Timestamp:  now.UTC().Format(time.RFC3339Nano),
+			}
+
+			if err := writeProgress(
+				*progressPath,
+				snapshot,
+			); err != nil {
+				log.Printf(
+					"write progress telemetry: %v",
+					err,
+				)
+			}
+
 			fmt.Printf(
 				"progress completed=%d total=%d allocation=%d rate=%.2f elapsed=%s\n",
 				newCompleted,
@@ -525,6 +562,47 @@ func writeDoneFile(
 	if err := os.WriteFile(
 		tmp,
 		[]byte("done\n"),
+		0o644,
+	); err != nil {
+		return err
+	}
+
+	return os.Rename(
+		tmp,
+		path,
+	)
+}
+
+func writeProgress(
+	path string,
+	snapshot progressSnapshot,
+) error {
+	if err := os.MkdirAll(
+		filepath.Dir(path),
+		0o755,
+	); err != nil {
+		return err
+	}
+
+	data, err :=
+		json.Marshal(snapshot)
+
+	if err != nil {
+		return err
+	}
+
+	data =
+		append(
+			data,
+			'\n',
+		)
+
+	tmp :=
+		path + ".tmp"
+
+	if err := os.WriteFile(
+		tmp,
+		data,
 		0o644,
 	); err != nil {
 		return err

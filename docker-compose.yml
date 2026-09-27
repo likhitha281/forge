@@ -39,6 +39,7 @@ services:
       WORKER_CPU_CORES: "8"
       WORKER_MEMORY_MB: "16384"
       WORKER_GPUS: "4"
+      FORGE_TRANSITION_COST_DATA: /etc/forge/transition_costs.csv
     depends_on:
       - coordinator
 

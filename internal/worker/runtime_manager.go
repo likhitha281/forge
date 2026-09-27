@@ -73,3 +73,26 @@ func (m *RuntimeManager) Count() int {
 
 	return len(m.runtimes)
 }
+
+func (m *RuntimeManager) Snapshot() []*Runtime {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	runtimes :=
+		make(
+			[]*Runtime,
+			0,
+			len(m.runtimes),
+		)
+
+	for _, runtime := range m.runtimes {
+
+		runtimes =
+			append(
+				runtimes,
+				runtime,
+			)
+	}
+
+	return runtimes
+}

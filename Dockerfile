@@ -26,10 +26,16 @@ FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates curl
 
+RUN mkdir -p /etc/forge
+
 COPY --from=build /coordinator /coordinator
 COPY --from=build /worker /worker
 COPY --from=build /checkpointable /usr/local/bin/checkpointable
 COPY --from=build /elastic /usr/local/bin/elastic
+
+COPY --from=build \
+    /src/results/transition_costs_combined.csv \
+    /etc/forge/transition_costs.csv
 
 ARG TARGET=coordinator
 
