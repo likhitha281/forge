@@ -1,0 +1,4 @@
+"timestamp_utc","policy","trial","state_mb","work","job_id","initial_gpu","target_gpu","final_gpu","transition_count","manual_transition_id","queue_seconds","completion_seconds","transition_seconds","bytes_moved","final_state"
+"2026-09-27T02:46:41.0987874Z","static","1","64","100000","d6fcd524-eb73-4b7c-9b30-a6e88018facb","2","4","2","0","","0.189","10.196","0","0","COMPLETED"
+"2026-09-27T02:46:51.8231556Z","naive","1","64","100000","3a5f52be-86c6-4d89-a9e3-c60958d9f741","2","4","4","1","88ce0082-b1d9-4e8b-acf1-515d47c2f1fa","0.684","8.336","0.148","134217744","COMPLETED"
+"2026-09-27T03:26:09.0724965Z","cost-aware","1","64","100000","f827cae1-9185-4b16-a57b-7447ef7738ba","2","4","2","0","","1.408","9.235","0","0","COMPLETED"
